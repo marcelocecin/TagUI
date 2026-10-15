@@ -440,6 +440,8 @@ if "%arg9%"=="speed" (
 
 rem concatenate parameters in order to fix issue when calling casperjs test
 rem $1 left out - filenames with spaces have issue when casperjs $params
+rem Windows still forwards only arg2-arg9 and splits on spaces. The MCP server
+rem sends further inputs, and inputs that contain spaces, as TAGUI_PARAM_n.
 set params=%arg2% %arg3% %arg4% %arg5% %arg6% %arg7% %arg8% %arg9%
 
 rem initialise log file and set permissions to protect user data

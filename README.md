@@ -417,6 +417,9 @@ TagUI Writer is a Windows app created by Arnaud Degardin / [@adegard](https://gi
 ### TAGUI FOR PYTHON
 TagUI for Python is a Python package created by TagUI's creator Ken Soh / [@kensoh](https://github.com/kensoh). It brings the digital process automation capabilities of TagUI directly to the Python environment through a simple, expressive and powerful API. To install, `pip install tagui`. For its Python API and architecture, refer to the [project homepage](https://github.com/tebelorg/TagUI-Python). At merely ~1k lines of code, the package is built on TagUI and its architecture is based on integration with TagUI's live mode.
 
+### MCP SERVER
+AI assistants that speak the [Model Context Protocol](https://modelcontextprotocol.io) (Claude Desktop, Cursor, and others) can drive TagUI through a self-contained Python server in [src/tagui_mcp](src/tagui_mcp). It creates and edits flow files, validates them with the parser, runs them, and returns the failing line, log, and screenshot so the assistant can repair the script. A live Chrome session can be saved back as a flow. Setup, client JSON config, the tool list, and limitations are in [src/tagui_mcp/README.md](src/tagui_mcp/README.md).
+
 ### FLOW SAMPLES
 TagUI includes the following automation flow samples ([tagui/src/samples folder](https://github.com/kelaberetiv/TagUI/tree/master/src/samples))
 

@@ -90,3 +90,15 @@
 
 # exclude local files for catboost integration
 /src/catboost/*
+
+# Python bytecode and local installs of the MCP server
+__pycache__/
+.pytest_cache/
+*.pyc
+src/tagui_mcp/*.egg-info/
+src/tagui_mcp/.venv/
+src/tagui_mcp/examples/*.js
+src/tagui_mcp/examples/*.log
+src/tagui_mcp/examples/*.raw
+src/tagui_mcp/examples/*.png
+src/tagui_mcp/workspace/
