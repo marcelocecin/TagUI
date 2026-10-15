@@ -10,12 +10,13 @@ from tagui_mcp.session import LiveSession, check_live_step
 FAKE = Path(__file__).parent / "fake_tagui.py"
 
 
-def test_check_live_step_rejects_done_and_newlines() -> None:
+def test_check_live_step_accepts_blocks_and_rejects_done() -> None:
     assert check_live_step("  echo hi  ") == "echo hi"
+    assert check_live_step("echo one\necho two") == "echo one\necho two"
     with pytest.raises(TaguiFailure):
         check_live_step("done")
     with pytest.raises(TaguiFailure):
-        check_live_step("echo hi\necho there")
+        check_live_step("py begin\nprint(1)")
 
 
 def test_live_session_round_trip() -> None:

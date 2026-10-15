@@ -99,6 +99,14 @@ def handle(line: str, state: dict[str, str]) -> None:
         if " as " not in stripped:
             print("ERROR - target/text missing for type", flush=True)
         return
+    if stripped == "wait" or stripped.startswith("wait "):
+        return
+    if stripped.startswith("run "):
+        print(stripped[4:].strip(), flush=True)
+        return
+    if stripped.startswith("snap ") and " to " in stripped:
+        Path(stripped.split(" to ", 1)[1].strip()).write_bytes(b"png")
+        return
     print(f"ERROR - cannot understand step {stripped}", flush=True)
 
 

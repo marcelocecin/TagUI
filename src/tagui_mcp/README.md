@@ -96,19 +96,29 @@ The `python3 -m tagui_mcp` form above works the same way in Cursor. Paths must b
 
 ## Tools
 
+The repair loop is `create_flow` or `save_flow`, `validate_flow`, `run_workspace_flow`, then `edit_flow` on `failing_line`.
+
 | Tool | What it does |
 | --- | --- |
-| `tagui_status` | Resolved `tagui` path, and whether a live browser session is open |
-| `run_flow` | Run a flow file. Optional `options` (`quiet`, `headless`, `chrome`, `firefox`, `report`, `speed`, `debug`, `test`, `baseline`, `upload`), `inputs` (p1, p2, ...), `datatable` (a csv), `timeout_seconds` |
-| `run_steps` | Write ad-hoc TagUI lines to a flow and run them. Returns `work_directory`, which is kept so snapshots and other output files remain |
-| `browser_start` | Start live mode on headless Chrome (`mode`: `headless` or `chrome`). Returns `work_directory` for files created during the session |
-| `browser_stop` | Send `done`, stop the TagUI process, and close TagUI's Chrome |
+| `tagui_status` | Resolved `tagui` path, workspace, live-session transcript, and whether a browser session is open |
+| `list_flows` | `.tagui` files in the workspace |
+| `read_flow` | Full text plus 1-based line numbers |
+| `create_flow` | New workspace flow. Fails if the name exists |
+| `save_flow` | Create or replace a workspace flow |
+| `edit_flow` | `replace`, `insert_before`, `delete`, or `append`. `line` is 1-based. `text` may contain newlines |
+| `validate_flow` | Run `tagui_parse.php` only. Reports unbalanced `{ }`, bad `for` loops, and quote errors. Does not open a browser |
+| `run_workspace_flow` | Run a workspace flow. Same result shape as `run_flow` |
+| `run_flow` | Run any flow file. Optional `options` (`quiet`, `headless`, `chrome`, `firefox`, `report`, `speed`, `debug`, `test`, `baseline`, `upload`), `inputs` (p1–p16), `datatable` (a csv), `timeout_seconds` |
+| `run_steps` | Write ad-hoc TagUI lines to a flow and run them. Returns `work_directory`, which is kept |
+| `save_session` | Write the live transcript to a workspace flow. `only_successful` drops steps that returned `ERROR` |
+| `browser_start` | Start live mode on headless Chrome (`mode`: `headless` or `chrome`) |
+| `browser_stop` | Send `done`, stop TagUI, and close TagUI's Chrome |
 | `browser_go` | Open an `http` or `https` URL and poll until the page location changes |
 | `browser_click` | `click <selector>` using TagUI's identifier rules (xpath, css, id, name, class, text, href) |
-| `browser_type` | `type <selector> as <text>`. `[clear]` and `[enter]` work as in TagUI |
+| `browser_type` | `type <selector> as <text>`. `[clear]` and `[enter]` work as in TagUI. Single quotes are escaped |
 | `browser_read` | Visible text of the page (`target` = `page`) or of one element |
 | `page_state` | URL, title, and visible text (text is truncated to 4000 characters) |
-| `browser_step` | One raw live-mode line for steps the helpers do not cover (`hover`, `select`, `snap`, `dom`, `js`, `echo`, ...) |
+| `browser_step` | One or more TagUI lines. `wait N` and `run` stay in the live browser. `check`, `frame`, `popup`, `if`, `for`, `while`, and `{` `}` replay the transcript as a real flow and then close the browser |
 
 Omitting `options` on `run_flow` / `run_steps` is quiet mode and TagUI's default PhantomJS browser. Example:
 
@@ -125,7 +135,41 @@ Omitting `options` on `run_flow` / `run_steps` is quiet mode and TagUI's default
 
 A flow that is only `echo` lines does not need a browser flag. Chrome flags do need Chrome installed.
 
-Every tool returns a JSON object. `ok` is false when TagUI prints `ERROR -`, the process exits non-zero, a dependency is missing, or the call times out. TagUI itself returns exit code 0 after a successful parse even when a later step fails, so `ok` follows the output, not only the exit code. `error_lines`, `stderr`, and `log_file` are included on flow runs.
+Every tool returns a JSON object. `ok` is false when TagUI prints `ERROR -`, the process exits non-zero, a dependency is missing, or the call times out. TagUI itself returns exit code 0 after a successful parse even when a later step fails, so `ok` follows the output, not only the exit code.
+
+A flow run also returns:
+
+| Field | Meaning |
+| --- | --- |
+| `exit_code` | Process status. `0` can still mean a later step failed |
+| `failing_line` | Line number from TagUI's `[LINE n]` message, when the parser emitted one |
+| `failing_step` | That line of the flow file |
+| `error_message` | First `ERROR -` line, preferring one that names a line |
+| `log` | Contents of the `.log` file, truncated |
+| `screenshots` | `.png` / `.jpg` files written beside the flow during the run |
+| `hint` | A short repair note for a few known errors |
+| `parameter_source` | `cli` or `environment` (`TAGUI_PARAM_n` when an input contains spaces or would pass the shell's 8-argument list) |
+
+When a click or type times out, TagUI captures the page with `casper.capture(snap_image())` before exiting. That file shows up in `screenshots`. A failed live step also returns `url`, `title`, `text`, and `screenshot` while the browser is still open.
+
+The workspace is `TAGUI_WORKSPACE`, or `src/tagui_mcp/workspace` when that variable is unset. Flow names are a single file name. `.tagui` is added when the name has no extension.
+
+## Authoring notes
+
+These come from closed TagUI issues and from how the parser actually behaves:
+
+- A URL stored in a variable is its own line: `` `url` ``. `visit url` is not a step.
+- The datatable row number is `[iteration]`.
+- Variables are visible to a flow included with the `tagui` step. There is no separate global declaration.
+- Nested `if`, `for`, `frame`, and `popup` need `{` and `}` on their own lines. `validate_flow` reports a mismatch.
+- After `run some-command`, print the output with `echo run_result`. A line that is only `` echo `run_result` `` prints the literal `+run_result+`. Live mode also echoes `run_result` for you.
+- Print an input with `echo p1`. Inputs that contain spaces are delivered as `TAGUI_PARAM_n` and still arrive in `p1`, `p2`, ...
+- `api_config.header` is an array of `'Name: value'` strings. An object such as `{Authorization: '...'}` is ignored by `call_api`.
+- Identifiers are tried in order: xpath, css, id, name, class, title, aria-label, visible text, href. `click h1` often fails; visible text or an xpath works. For a sibling, an xpath such as `//span[text()="350,90"]/ancestor::tr//input[contains(@class,"ico-salvar")]` is the usual shape.
+- `if !exist(button.png)` is the visual-automation condition. `click button.png` uses the image. OCR of a whole region can crash Sikuli's Tesseract process; that abort is a dead process, not an `ERROR -` line.
+- `snap` captures the viewport. A table taller than the window is clipped. Headless `snap page to file.pdf` has produced unreadable PDFs; use `.png` for failure shots.
+- PhantomJS and Chrome do not share one JavaScript regex engine. Page scripts that must match a browser should run with `headless` or `chrome`, or in a `dom` step.
+- Visual automation from cron needs a display. This server runs in the user's session, same as a terminal `tagui` run.
 
 ## Try it
 
@@ -155,13 +199,14 @@ Run that from a shell where `PYTHONPATH` includes `src/tagui_mcp`, or use the in
 
 ## Limitations
 
-- **Same privileges as the user.** A flow can run shell commands (`run`) and Python (`py`). Live mode rejects `run`, but `run_flow` and `run_steps` do not. This is a local automation driver, not a sandbox. The `upload` option sends the run log to hastebin.com.
-- **One TagUI Chrome at a time.** Live mode and `headless` / `chrome` flows use debugging port 9222 and `src/chrome/tagui_user_profile`. The server refuses `run_flow` / `run_steps` while a browser session is open. Do not start another TagUI Chrome run against that port at the same time. If a session is stuck, run `src/end_processes`.
-- **Live mode is a single-step prompt.** `wait`, `check`, `frame`, `popup`, `run`, and multi-line `for` / `{ }` blocks are rejected by TagUI there. Put those in `run_steps` or a flow file. `browser_go` polls the URL because the live-mode navigation step returns before the load event.
-- **`browser_type` and the click/read helpers reject quotes and newlines** so the generated step stays valid. Use `browser_step` when the value needs a single quote.
-- **Files from the live session** are written under the `work_directory` returned by `browser_start` (the live flow's folder). `browser_stop` deletes that directory. Copy snapshots out before stopping. `run_steps` leaves its `work_directory` in place.
-- **Argument budget.** The `tagui` script only forwards eight arguments after the flow file. Options, inputs, and a datatable share that budget. Inputs cannot contain whitespace; that is TagUI's own parameter splitting.
-- **Engines are not bundled.** Missing `php`, CasperJS, PhantomJS, or Chrome shows up as a failed tool call (`stderr` often says `command not found`). Packaged TagUI builds already include those binaries. CasperJS 1.1's launcher asks for `python` on `PATH` (`python3` is not enough unless you symlink it). PhantomJS 2.1.1 on a system OpenSSL 3 fails unless the client env sets `OPENSSL_CONF` to `/dev/null` or another config that does not load the OpenSSL 3 `providers` module.
+- **Same privileges as the user.** A flow can run shell commands (`run`) and Python (`py`). This is a local automation driver, not a sandbox. The `upload` option sends the run log to hastebin.com.
+- **One TagUI Chrome at a time.** Live mode and `headless` / `chrome` flows use debugging port 9222 and `src/chrome/tagui_user_profile`. Those two values are hardcoded in `src/tagui`, `tagui_chrome.php`, and `end_processes`. A second concurrent browser needs a port and a profile threaded through that whole path, so the server still refuses `run_flow` / `run_steps` while a browser session is open. If a session is stuck, run `src/end_processes`.
+- **Live mode still cannot compile blocks.** `wait N` and a single-line `run` now run inside the live browser: the live loop is one CasperJS step per line, so `casper.wait` and `casper.waitForExec` finish before the next line is read. `check`, `frame`, `popup`, `if`, `for`, `while`, and `{` `}` are generated by the PHP parser as blocks around the following steps. Reimplementing that compiler inside the live interpreter would fork the language. `browser_step` detects those lines, closes the live browser, and runs the transcript through the normal flow runner instead. `browser_go` still polls the URL because navigation returns before the load event.
+- **A newline is a new step.** The live prompt reads one line at a time. `browser_step` accepts several lines. A value typed into a field cannot contain a newline; use `[enter]`. Single quotes in `click` and `type` are escaped. A step that mixes `'` and `"` is still rejected by TagUI's string handling.
+- **`py begin` / `run begin` and the matching `finish` must be one `browser_step`.** The sync marker is an `echo` line. If it lands inside the block, TagUI treats it as part of the block.
+- **Files from the live session** are written under the `work_directory` returned by `browser_start`. `browser_stop` deletes that directory. `save_session` writes the transcript into the workspace, which is kept. `run_steps` leaves its `work_directory` in place.
+- **Shell argument list.** On macOS and Linux, `src/tagui` forwards every remaining argument, including values with spaces. `tagui.cmd` still forwards only eight arguments and splits on spaces. The MCP server sends overflow inputs and inputs that contain spaces as `TAGUI_PARAM_1` … `TAGUI_PARAM_16`, which `tagui_header.js` copies into `p1` … `p16` when the CLI slot is empty. Options plus a datatable still share eight slots. Inputs cannot contain newlines.
+- **Engines are not bundled.** Missing `php`, CasperJS, PhantomJS, or Chrome shows up as a failed tool call (`stderr` often says `command not found`). Packaged TagUI builds already include those binaries. CasperJS 1.1's launcher asks for `python` on `PATH` (`python3` is not enough unless you symlink it). PhantomJS 2.1.1 on a system OpenSSL 3 fails unless the client env sets `OPENSSL_CONF` to `/dev/null` or another config that does not load the OpenSSL 3 `providers` module. On PHP 8, `count(false)` from `fgetcsv` used to abort the parser; `csv_row_count()` reports an empty datatable row instead.
 - **stdio only.** `MCPServer.run` can also serve Streamable HTTP, but this package does not enable it. Desktop clients use stdio.
 - **Windows.** The executable name switches to `tagui.cmd`. Browser tools were exercised on Linux. Live mode reads CasperJS stdout a line at a time; that matches TagUI for Python, which depends on CasperJS flushing each `echo`.
 
@@ -179,4 +224,10 @@ src/tagui_mcp/
 
 ## Upstream
 
-The server is meant to be proposed to tebelorg/TagUI as an optional add-on. Nothing under `src/` besides this directory and a short pointer in the main README needs to change. Maintainers can drop the directory without affecting `tagui`, `tagui_parse.php`, or the existing PHP API queue (`tagui_service.php`), which remains a crontab-fed batch queue and is a poor fit for an interactive MCP session.
+The server is meant to be proposed to tebelorg/TagUI as an optional add-on. The package lives in this directory. A few small runner changes support it and are useful without MCP:
+
+- `src/tagui` forwards every remaining argument, including values that contain spaces. `tagui.cmd` is unchanged apart from a comment.
+- `tagui_header.js` reads `TAGUI_PARAM_n` into `p1`–`p16` when that CLI slot is empty, escapes single quotes in live `click` / `type`, and implements live `wait` and `run`.
+- `tagui_parse.php` runs live mode as one CasperJS step per line, snaps the page when an element is missing, and uses `csv_row_count()` so PHP 8 does not throw `count(false)` on a datatable.
+
+`tagui_service.php` stays the crontab-fed batch queue. It is a poor fit for an interactive MCP session. Dropping `src/tagui_mcp` leaves the runner changes above in place.

@@ -101,3 +101,4 @@ src/tagui_mcp/examples/*.js
 src/tagui_mcp/examples/*.log
 src/tagui_mcp/examples/*.raw
 src/tagui_mcp/examples/*.png
+src/tagui_mcp/workspace/

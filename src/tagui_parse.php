@@ -25,28 +25,28 @@ $footer_file = fopen('tagui_footer.js','r') or die("ERROR - cannot open tagui_fo
 $repo_count = 0; if (file_exists(getenv('custom_csv_file'))) { // load datatable or legacy datatable / repository
 $repo_file = fopen(getenv('custom_csv_file'),'r') or die("ERROR - cannot open " . getenv('custom_csv_file') . "\n");
 while (!feof($repo_file)) {$repo_data[$repo_count] = fgetcsv($repo_file);
-if (@count($repo_data[$repo_count]) == 0) die("ERROR - empty row found in " . getenv('custom_csv_file') . "\n");
+if (csv_row_count($repo_data[$repo_count]) == 0) die("ERROR - empty row found in " . getenv('custom_csv_file') . "\n");
 $repo_count++;} fclose($repo_file); $repo_count-=1; //-1 for header, for EOF need to check flexibly using below line
-if (@count($repo_data[$repo_count]) == 1) $repo_count-=1;} //-1 for EOF (Windows files don't end with newline character)
+if (csv_row_count($repo_data[$repo_count]) == 1) $repo_count-=1;} //-1 for EOF (Windows files don't end with newline character)
 
 $local_repo_location = str_replace("\\","/",dirname($script)) . '/tagui_local.csv';
 if (file_exists($local_repo_location)) { // load local repository file if it exists for objects and keywords
 $local_repo_file = fopen($local_repo_location,'r') or die("ERROR - cannot open " . 'tagui_local.csv' . "\n");
 if ($repo_count != 0) {$repo_count++; fgetcsv($local_repo_file);} // +1 if array has data, discard header record
 while (!feof($local_repo_file)) {$repo_data[$repo_count] = fgetcsv($local_repo_file);
-if (@count($repo_data[$repo_count]) == 0) die("ERROR - empty row found in " . 'tagui_local.csv' . "\n");
-if (@count($repo_data[$repo_count]) != 1) // pad the empty columns when local repository is used with datatable
-{$repo_data[$repo_count] = array_pad($repo_data[$repo_count], @count($repo_data[0]), $repo_data[$repo_count][1]);}
-$repo_count++;} fclose($local_repo_file); $repo_count-=1; if (@count($repo_data[$repo_count]) == 1) $repo_count-=1;}
+if (csv_row_count($repo_data[$repo_count]) == 0) die("ERROR - empty row found in " . 'tagui_local.csv' . "\n");
+if (csv_row_count($repo_data[$repo_count]) != 1) // pad the empty columns when local repository is used with datatable
+{$repo_data[$repo_count] = array_pad($repo_data[$repo_count], csv_row_count($repo_data[0]), $repo_data[$repo_count][1]);}
+$repo_count++;} fclose($local_repo_file); $repo_count-=1; if (csv_row_count($repo_data[$repo_count]) == 1) $repo_count-=1;}
 
 if (file_exists('tagui_global.csv')) { // load global repository file if it exists for objects and keywords
 $global_repo_file = fopen('tagui_global.csv','r') or die("ERROR - cannot open " . 'tagui_global.csv' . "\n");
 if ($repo_count != 0) {$repo_count++; fgetcsv($global_repo_file);} // +1 if array has data, discard header record
 while (!feof($global_repo_file)) {$repo_data[$repo_count] = fgetcsv($global_repo_file);
-if (@count($repo_data[$repo_count]) == 0) die("ERROR - empty row found in " . 'tagui_global.csv' . "\n");
-if (@count($repo_data[$repo_count]) != 1) // pad the empty columns when global repository is used with datatable
-{$repo_data[$repo_count] = array_pad($repo_data[$repo_count], @count($repo_data[0]), $repo_data[$repo_count][1]);}
-$repo_count++;} fclose($global_repo_file); $repo_count-=1; if (@count($repo_data[$repo_count]) == 1) $repo_count-=1;}
+if (csv_row_count($repo_data[$repo_count]) == 0) die("ERROR - empty row found in " . 'tagui_global.csv' . "\n");
+if (csv_row_count($repo_data[$repo_count]) != 1) // pad the empty columns when global repository is used with datatable
+{$repo_data[$repo_count] = array_pad($repo_data[$repo_count], csv_row_count($repo_data[0]), $repo_data[$repo_count][1]);}
+$repo_count++;} fclose($global_repo_file); $repo_count-=1; if (csv_row_count($repo_data[$repo_count]) == 1) $repo_count-=1;}
 
 $tagui_web_browser = "this"; // set the web browser to be used base on tagui_web_browser environment variable
 if ((getenv('tagui_web_browser')=='headless') or (getenv('tagui_web_browser')=='chrome')) $tagui_web_browser = 'chrome';
@@ -303,6 +303,9 @@ die("ERROR - cannot open file for step " . trim($script_line) . "\n");
 while(!feof($temp_input_file)) {$expanded_intent .= expand_intent(fgets($temp_input_file));} fclose($temp_input_file);
 return $expanded_intent;}} else return rtrim($script_line) . "\n";}
 
+function csv_row_count($row) { // fgetcsv() returns false at EOF; PHP 8 throws TypeError on count(false)
+if (is_array($row)) return count($row); return 0;}
+
 function current_line() {return "[LINE " . $GLOBALS['line_number'] . "]";}
 
 function parse_intent($script_line) {$GLOBALS['line_number']++; $GLOBALS['real_line_number']++;
@@ -541,7 +544,8 @@ else return " // beg_tx while loop marker\n";}
 
 function end_tx($locator) { // helper function to return ending string for handling locators
 if ($GLOBALS['inside_while_loop'] == 0)
-return "},\nfunction timeout() {this.echo('ERROR - cannot find ".$locator."').exit();});}"."});".end_fi()."\n\n";
+// snap the page before exiting so a missing element leaves a screenshot next to the flow
+return "},\nfunction timeout() {this.echo('ERROR - cannot find ".$locator."');try{casper.capture(snap_image());}catch(e){}this.exit();});}"."});".end_fi()."\n\n";
 else if ($GLOBALS['inside_code_block']==0)
 {$GLOBALS['inside_while_loop'] = 0; // reset inside_while_loop if not inside block
 $GLOBALS['for_loop_tracker'] = ""; // reset for_loop_tracker if not inside block
@@ -844,11 +848,20 @@ else return "casper.then(function() {".
 "techo('".$raw_intent."');});\ncasper.then(function() {casper.wait(" . (floatval($params)*1000) . ", function() {"."});});"."\n\n";}
 
 function live_intent($raw_intent) { // live mode to interactively test tagui steps and js code (casperjs context)
-return "casper.then(function() {".
-"{var live_input = '';\nvar sys = require('system'); sys.stdout.write('LIVE MODE - type done to quit\\n \\b');\n".
-"while (true) {live_input = sys.stdin.readLine(); // evaluate input in casperjs context until done is entered\n".
-"if (live_input.indexOf('done') == 0) break; try {eval(tagui_parse(live_input));}
-catch(e) {this.echo('ERROR - ' + e.message.charAt(0).toLowerCase() + e.message.slice(1));}}}".end_fi()."});"."\n\n";}
+// one casper step per line, instead of a blocking while loop. casper.wait / waitForExec
+// queued by a step then run before the next line is read, so wait and run work here.
+return "casper.then(function() {\n".
+"var sys = require('system'); sys.stdout.write('LIVE MODE - type done to quit\\n \\b');\n".
+"var tagui_live_step = function() {\n".
+"var live_input = ''; try {live_input = sys.stdin.readLine();} catch (e) {return;}\n".
+"if (live_input === null) return;\n".
+"if (live_input.indexOf('done') == 0) return;\n".
+"try {eval(tagui_parse(live_input));}\n".
+"catch (e) {this.echo('ERROR - ' + e.message.charAt(0).toLowerCase() + e.message.slice(1));}\n".
+"casper.then(tagui_live_step);\n".
+"};\n".
+"casper.then(tagui_live_step);\n".
+"});\n\n";}
 
 function ask_intent($raw_intent) { // ask user for input during automation and save to ask_result variable
 $raw_intent = str_replace("\'","'",$raw_intent); $raw_intent = str_replace("'","\'",$raw_intent);

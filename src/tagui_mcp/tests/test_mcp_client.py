@@ -25,6 +25,14 @@ EXPECTED_TOOLS = {
     "browser_read",
     "page_state",
     "browser_step",
+    "list_flows",
+    "read_flow",
+    "create_flow",
+    "save_flow",
+    "edit_flow",
+    "validate_flow",
+    "run_workspace_flow",
+    "save_session",
 }
 
 
@@ -43,7 +51,11 @@ async def _run(tmp_path: Path) -> None:
     params = StdioServerParameters(
         command=sys.executable,
         args=["-m", "tagui_mcp"],
-        env={"PYTHONPATH": str(ROOT), "TAGUI_BIN": str(FAKE)},
+        env={
+            "PYTHONPATH": str(ROOT),
+            "TAGUI_BIN": str(FAKE),
+            "TAGUI_WORKSPACE": str(tmp_path / "flows"),
+        },
         cwd=str(tmp_path),
     )
     async with stdio_client(params) as (read, write):
@@ -73,6 +85,35 @@ async def _run(tmp_path: Path) -> None:
             assert steps["ok"] is True
             assert "from an ad-hoc step" in steps["output"]
 
+            created = json.loads(
+                _text(
+                    await session.call_tool(
+                        "create_flow",
+                        {"name": "sample", "content": 'echo "from workspace"\n'},
+                    )
+                )
+            )
+            assert created["ok"] is True
+            edited = json.loads(
+                _text(
+                    await session.call_tool(
+                        "edit_flow",
+                        {
+                            "name": "sample",
+                            "op": "replace",
+                            "line": 1,
+                            "text": 'echo "edited workspace"',
+                        },
+                    )
+                )
+            )
+            assert edited["lines"][0]["text"] == 'echo "edited workspace"'
+            workspace_run = json.loads(
+                _text(await session.call_tool("run_workspace_flow", {"name": "sample"}))
+            )
+            assert workspace_run["ok"] is True
+            assert "edited workspace" in workspace_run["output"]
+
             started = json.loads(
                 _text(
                     await session.call_tool(
@@ -93,6 +134,11 @@ async def _run(tmp_path: Path) -> None:
             )
             assert opened["ok"] is True
             assert "example.com" in opened["url"]
+            promoted = json.loads(
+                _text(await session.call_tool("save_session", {"name": "promoted"}))
+            )
+            assert promoted["ok"] is True
+            assert "https://example.com" in promoted["content"]
             read = json.loads(
                 _text(await session.call_tool("browser_read", {"target": "h1"}))
             )

@@ -25,6 +25,16 @@ from tagui_mcp.runner import TaguiFailure, reap_tagui_chrome, resolve_tagui_exec
 
 BrowserMode = Literal["headless", "chrome"]
 LIVE_BANNER = "LIVE MODE - type done to quit"
+_FLOW_KEYWORDS = frozenset({"check", "frame", "popup", "if", "else", "for", "while"})
+_BLOCK_OPEN = {
+    "py begin": "py",
+    "r begin": "r",
+    "run begin": "run",
+    "js begin": "js",
+    "dom begin": "dom",
+    "vision begin": "vision",
+}
+_BLOCK_CLOSE = {f"{name} finish": name for name in ("py", "r", "run", "js", "dom", "vision")}
 
 
 def _never(value: NoReturn) -> NoReturn:
@@ -52,6 +62,8 @@ class LiveSession:
         self._mode: BrowserMode | None = None
         self._id = 0
         self._running = False
+        self.transcript: list[str] = []
+        self.outcomes: list[bool] = []
 
     @property
     def running(self) -> bool:
@@ -74,6 +86,8 @@ class LiveSession:
         if self.running:
             raise TaguiFailure("browser session already running; call browser_stop first")
         self._reap()
+        self.transcript = []
+        self.outcomes = []
         self._workdir = Path(tempfile.mkdtemp(prefix="tagui_mcp_live_"))
         flow_path = self._workdir / "mcp_live"
         flow_path.write_text("// TagUI MCP live session\nlive\n", encoding="utf-8")
@@ -117,16 +131,28 @@ class LiveSession:
                 pass
         self._reap()
 
-    def run_step(self, step: str, timeout: float = 45) -> str:
+    def run_step(self, step: str, timeout: float = 45, record: bool = True) -> str:
         checked = check_live_step(step)
+        lines = checked.split("\n")
         if not self.running:
             raise TaguiFailure("browser session is not running; call browser_start first")
         self._id += 1
         marker = f"TAGUI_MCP_END_{self._id}_{uuid.uuid4().hex[:8]}"
-        self._write(checked + "\n")
+        for line in lines:
+            self._write(line + "\n")
         self._write(f'echo "{marker}"\n')
         output = self._read_until_contains(marker, timeout).replace("\b", "")
+        if record:
+            self.transcript.extend(lines)
+            self.outcomes.extend([True] * len(lines))
         return output.strip("\n")
+
+    def mark_last(self, count: int, ok: bool) -> None:
+        if count <= 0:
+            return
+        start = max(0, len(self.outcomes) - count)
+        for index in range(start, len(self.outcomes)):
+            self.outcomes[index] = ok
 
     def dump(self, expression: str, dest: Path, timeout: float = 45) -> str:
         if any(character in expression for character in "\n\r\"'`"):
@@ -135,7 +161,7 @@ class LiveSession:
             raise TaguiFailure("dump path cannot contain spaces")
         if dest.exists():
             dest.unlink()
-        output = self.run_step(f"dump {expression} to {dest}", timeout=timeout)
+        output = self.run_step(f"dump {expression} to {dest}", timeout=timeout, record=False)
         if "ERROR -" in output:
             raise TaguiFailure(output.strip())
         if not dest.is_file():
@@ -267,16 +293,54 @@ class LiveSession:
             self._workdir = None
 
 
+def line_needs_flow_parser(line: str) -> bool:
+    """True for steps the live interpreter cannot compile (conditions, blocks, frames)."""
+    head = line.split("//", 1)[0].strip()
+    if head in {"{", "}"}:
+        return True
+    if head == "":
+        return False
+    keyword = head.split(None, 1)[0].lower()
+    return keyword in _FLOW_KEYWORDS
+
+
+def assert_blocks_closed(lines: list[str]) -> None:
+    """A begin/finish block must arrive in one call so the sync marker stays outside it."""
+    stack: list[str] = []
+    for line in lines:
+        key = line.strip().lower()
+        if key in _BLOCK_OPEN:
+            stack.append(_BLOCK_OPEN[key])
+            continue
+        if key not in _BLOCK_CLOSE:
+            continue
+        kind = _BLOCK_CLOSE[key]
+        if not stack or stack[-1] != kind:
+            raise TaguiFailure(f"{key} does not close the block that is open")
+        stack.pop()
+    if stack:
+        raise TaguiFailure(
+            "this step opens a "
+            + stack[-1]
+            + " block without finish. Send the whole begin/finish block in one browser_step, "
+            "or save it in a flow file."
+        )
+
+
 def check_live_step(step: str) -> str:
     if not isinstance(step, str):
         raise TaguiFailure("step must be a string")
-    checked = step.strip()
-    if checked == "":
+    if "\x00" in step:
+        raise TaguiFailure("step cannot contain NUL characters")
+    lines = [line.strip() for line in step.splitlines() if line.strip() != ""]
+    if not lines:
         raise TaguiFailure("step is empty")
-    if "\n" in step or "\r" in step or "\x00" in step:
-        raise TaguiFailure("a live-mode step must be a single line; use run_steps for a multi-line flow")
-    if checked.startswith("done"):
-        raise TaguiFailure("a step starting with 'done' would end live mode; call browser_stop instead")
-    if len(checked) > 8000:
-        raise TaguiFailure("step exceeds 8000 characters")
-    return checked
+    if len(lines) > 200:
+        raise TaguiFailure("a live step is limited to 200 lines")
+    for line in lines:
+        if line.startswith("done"):
+            raise TaguiFailure("a step starting with 'done' would end live mode; call browser_stop instead")
+        if len(line) > 8000:
+            raise TaguiFailure("a live step line exceeds 8000 characters")
+    assert_blocks_closed(lines)
+    return "\n".join(lines)

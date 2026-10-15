@@ -53,7 +53,13 @@ def test_browser_tools_against_fake_live_mode() -> None:
         typed = service.browser_type("search-box", "github")
         assert typed["ok"] is True
         quoted = service.browser_type("search-box", "it's")
-        assert quoted["ok"] is False
+        assert quoted["ok"] is True
+        assert "screenshot" in missing
+        waited = service.browser_step("wait 1")
+        assert waited["ok"] is True
+        ran = service.browser_step("run echo hello-from-run")
+        assert ran["ok"] is True
+        assert "echo hello-from-run" in str(ran["output"])
         stepped = service.browser_step('echo "from live"')
         assert stepped["ok"] is True
         assert stepped["output"] == "from live"
@@ -61,6 +67,29 @@ def test_browser_tools_against_fake_live_mode() -> None:
         assert refused["ok"] is False
         again = service.browser_start("chrome")
         assert again["ok"] is False
+    finally:
+        service.close()
+
+
+def test_flow_parser_steps_replay_and_session_can_be_saved(tmp_path: Path) -> None:
+    service = TaguiService(tagui_bin=FAKE, workspace=tmp_path)
+    try:
+        assert service.browser_start("headless", startup_timeout=5)["ok"] is True
+        opened = service.browser_go("https://example.com")
+        assert opened["ok"] is True
+        unclosed = service.browser_step("py begin")
+        assert unclosed["ok"] is False
+        assert "block" in str(unclosed["error"])
+        replayed = service.browser_step('if total greater than 1\necho "inside"')
+        assert replayed["executed_as"] == "flow"
+        assert replayed["browser_running"] is False
+        assert replayed["ok"] is True
+        assert "inside" in str(replayed["output"])
+        saved = service.save_session("from_live")
+        assert saved["ok"] is True
+        text = Path(str(saved["path"])).read_text(encoding="utf-8")
+        assert "https://example.com" in text
+        assert "if total greater than 1" in text
     finally:
         service.close()
 

@@ -18,13 +18,20 @@ atexit.register(reset_service)
 
 INSTRUCTIONS = (
     "Drive TagUI, a local RPA tool, on this machine. "
-    "Use tagui_status to confirm the tagui executable. "
-    "Use run_flow for an existing flow file and run_steps for a one-shot script "
-    "in TagUI's step language. "
-    "Use browser_start, then browser_go, browser_click, browser_type, browser_read, "
-    "page_state, and browser_step for a persistent Chrome session, and browser_stop "
-    "when finished. Only one TagUI run can be active at a time. "
-    "Flows run with the user's privileges, including any run or py steps in a flow file."
+    "Prefer reusable flow files: create_flow or save_flow, validate_flow, "
+    "run_workspace_flow, then edit_flow on the failing_line and run again. "
+    "run_flow and run_workspace_flow return failing_line, failing_step, error_message, "
+    "log, screenshots, and a hint. "
+    "Use browser_start for a live Chrome session. browser_step accepts several lines. "
+    "wait N and run work in live mode. check, frame, popup, if, for, while, and brace "
+    "blocks are replayed as a flow because the live interpreter cannot compile them. "
+    "save_session writes the live transcript into the workspace. "
+    "Only one TagUI Chrome can run at a time. "
+    "Flows run with the user's privileges, including any run or py steps in a flow file. "
+    "A URL stored in a variable is a line that is just `url`. "
+    "Datatable row number is [iteration]. Variables are visible to flows included with tagui. "
+    "echo run_result prints a run step. echo p1 prints an input. "
+    "api headers are an array of 'Name: value' strings."
 )
 
 mcp = MCPServer(
@@ -139,7 +146,7 @@ def browser_type(selector: str, text: str, timeout_seconds: float = 45) -> str:
     """Type text into an element in the live session.
 
     [clear] at the start clears the field and [enter] presses enter, same as TagUI.
-    Single quotes and newlines are rejected; use browser_step for those values.
+    Single quotes are escaped. A newline is a new TagUI step, so it is rejected.
     """
     return _json(get_service().browser_type(selector, text, timeout_seconds=timeout_seconds))
 
@@ -162,14 +169,102 @@ def page_state(timeout_seconds: float = 45) -> str:
 
 @mcp.tool()
 def browser_step(step: str, timeout_seconds: float = 45) -> str:
-    """Send one TagUI live-mode step and return what it echoes.
+    """Send one or more TagUI lines to the live session.
 
-    Use this for steps the other browser tools do not cover (hover, select, snap,
-    dom, js, echo). The step must be a single line. Steps that live mode itself
-    rejects, such as wait, check, frame, and run, come back as TagUI ERROR lines.
-    A step starting with done is refused because that closes live mode.
+    wait N and run execute in the live browser. A py/js/dom/run/vision begin-finish
+    block must be sent together so the sync marker stays outside the block.
+    check, frame, popup, if, for, while, and { } are run by replaying the session
+    transcript as a real flow, which closes the live browser. A step starting with
+    done is refused because that closes live mode.
     """
     return _json(get_service().browser_step(step, timeout_seconds=timeout_seconds))
+
+
+@mcp.tool()
+def list_flows() -> str:
+    """List .tagui files in the workspace directory (TAGUI_WORKSPACE, or src/tagui_mcp/workspace)."""
+    return _json(get_service().list_flows())
+
+
+@mcp.tool()
+def read_flow(name: str) -> str:
+    """Read a workspace flow, including 1-based line numbers for edit_flow."""
+    return _json(get_service().read_flow(name))
+
+
+@mcp.tool()
+def create_flow(name: str, content: str) -> str:
+    """Create a new workspace flow. Fails if the name already exists.
+
+    content is the full TagUI script. A URL from a variable is a line that is just `url`.
+    Use [iteration] for the current datatable row. echo run_result prints a run step.
+    echo p1 prints an input, including one that contains spaces.
+    For an API call, set api_config.header to an array of 'Name: value' strings, not an object.
+    """
+    return _json(get_service().create_flow(name, content))
+
+
+@mcp.tool()
+def save_flow(name: str, content: str) -> str:
+    """Create or replace a workspace flow with the full script text."""
+    return _json(get_service().save_flow(name, content))
+
+
+@mcp.tool()
+def edit_flow(name: str, op: str, line: int = 0, text: str = "") -> str:
+    """Change lines in a workspace flow and return the numbered script.
+
+    op is replace, insert_before, delete, or append. line is 1-based.
+    append ignores line. text may contain newlines and then becomes several lines.
+    Use the failing_line from a run as line.
+    """
+    return _json(get_service().edit_flow(name, op, line, text))
+
+
+@mcp.tool()
+def validate_flow(name: str) -> str:
+    """Parse a workspace flow with tagui_parse.php and do not launch a browser.
+
+    Reports syntax errors such as unbalanced { }, bad for loops, and inconsistent quotes.
+    This does not prove the selectors exist on a page.
+    """
+    return _json(get_service().validate_flow(name))
+
+
+@mcp.tool()
+def run_workspace_flow(
+    name: str,
+    options: list[str] | None = None,
+    inputs: list[str] | None = None,
+    datatable: str | None = None,
+    timeout_seconds: float = 120,
+) -> str:
+    """Run a workspace flow and return structured failure details.
+
+    The JSON includes exit_code, failing_line, failing_step, error_message, log,
+    screenshots, and hint. Inputs may contain spaces; they are passed as p1, p2, ...
+    A missing element captures a screenshot beside the flow when Chrome or PhantomJS is used.
+    """
+    return _json(
+        get_service().run_workspace_flow(
+            name,
+            options=options,
+            inputs=inputs,
+            datatable=datatable,
+            timeout_seconds=timeout_seconds,
+        )
+    )
+
+
+@mcp.tool()
+def save_session(name: str, only_successful: bool = False) -> str:
+    """Save the live session transcript as a workspace flow.
+
+    only_successful drops steps that returned a TagUI ERROR, including a block
+    that failed when it was replayed as a flow. Copy snapshots out before
+    browser_stop; stopping deletes the live work directory, not this flow file.
+    """
+    return _json(get_service().save_session(name, only_successful=only_successful))
 
 
 def main() -> None:
