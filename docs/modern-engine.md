@@ -1,8 +1,8 @@
 # Modern Chrome engine
 
-TagUI and RPA-Python can run a useful subset of flows on current Chrome or Edge without CasperJS or PhantomJS. The new engine is opt-in. A run that does not pass `modern` still uses CasperJS, PhantomJS, and the existing Chrome file bridge.
+TagUI and RPA-Python can run browser and logic flows on current Chrome or Edge without CasperJS or PhantomJS. The engine is opt-in. A run that does not pass `modern` still uses CasperJS, PhantomJS, and the existing Chrome file bridge.
 
-This note is the architecture record, the comparison of replacement options, the migration plan, and the status of the proof of concept on `marcelocecin/TagUI` branch `rpa_python`.
+This note is the architecture record, the comparison of replacement options, the migration plan, and the status of the engine on `marcelocecin/TagUI` branch `rpa_python`. Phase 2, in this branch, adds the remaining common steps and one shared step table. Phase 3, making `modern` the default for Chrome, is not ready.
 
 ## How TagUI runs a flow today
 
@@ -113,7 +113,7 @@ The constraints that matter for an upstream-acceptable change:
 | Playwright (Python or Node) | a maintained browser driver, auto-waiting, traces | new runtime and a large browser download. The live contract can be preserved, but every step is reimplemented and the install story changes. RPA-Python would grow a second dependency stack |
 | Node + `chrome-remote-interface` or Puppeteer | close to what `chrome.*` already does | Node becomes mandatory. TagUI comments rejected that for the Chrome bridge |
 | Python CDP (the RPA-Python process drives Chrome itself) | no Casper inside the Python API | breaks `tagui flow.tag` for everyone who does not use RPA-Python, and splits one language across two engines |
-| PHP CDP, opt-in flag (this proof of concept) | PHP, which is already required; the vendored websocket client; the live banner; RPA-Python's `send` / `dump` / `done` unchanged | a second implementation of the step table until it is shared with the parser. Firefox and Sikuli stay on the old engine |
+| PHP CDP, opt-in flag (this proof of concept) | PHP, which is already required; the vendored websocket client; the live banner; RPA-Python's `send` / `dump` / `done` unchanged | Firefox, Sikuli, and `js` / `py` / `r` stay on the CasperJS engine. The step table is shared through `src/tagui_steps.php` |
 
 ## Recommendation
 
@@ -126,12 +126,12 @@ Reasons:
 - Chrome and Edge ship native builds for Apple Silicon. The engine does not download PhantomJS.
 - A flag lets maintainers try the engine on real flows without changing the default that existing users and the Tump zip expect.
 
-Trade-off: locators and step semantics now exist in `tagui_header.js` and in `src/tagui_modern.php`. They will drift until both sides read one step table. The proof of concept accepts that drift and documents the gap below.
+Keyword aliases, the code-step predicate, and locator attribute order live in `src/tagui_steps.php`. The parser and the modern engine load that file. The parser also writes the same functions into every generated CasperJS script, and `tagui_header.js` calls them from `tx()`, `check_tx()`, `get_intent()`, and `is_code()`.
 
 ### Phased migration
 
 1. **This change.** `tagui flow modern` runs the PHP engine. Omitted, the run is CasperJS as before. RPA-Python can pass `modern` once it knows the binary supports it; until then it keeps working against Casper live mode.
-2. **Grow coverage and share the step table.** Move the intent list (step name, parameter shape, locator, error text) into one place the parser and the PHP engine both use. Add `select`, `upload`, `download`, `table`, `frame`, `popup`, `api`, and `run` as flows need them.
+2. **Grow coverage and share the step table.** Done in this branch. `src/tagui_steps.php` is the shared table. The modern engine runs `select`, `upload`, `download`, `receive`, `table`, `frame`, `popup`, `api`, `run`, `while`, `break`, `continue`, `check`, `ask`, `save`, `write`, `load`, datatables, and `show page` as HTML. `js`, `py`, `r`, `vision`, `keyboard`, `mouse`, and Sikuli image steps still stop and name the CasperJS engine.
 3. **Flip the default for Chrome.** `headless` and `chrome` start the modern engine. A `casper` flag selects the old sequencer. PhantomJS remains available only through that flag.
 4. **Drop PhantomJS.** Remove `phantomjs-prebuilt`, `casperjs`, and `slimerjs` from `package.json` when the remaining visual and Firefox paths have a replacement. RPA-Python can then stop patching the PhantomJS binary and the macOS shebang. The Tump overlay shrinks to whatever live-mode delta is still required, and eventually to nothing if upstream live mode is the one-step-per-line version.
 
@@ -143,13 +143,13 @@ Trade-off: locators and step semantics now exist in `tagui_header.js` and in `sr
 php -q tagui_modern.php <flow> <remaining args>
 ```
 
-On Unix, `stdbuf -oL tee` line-buffers the log tee. GNU `tee` block-buffers when stdout is a pipe, which would hide the short live-mode banner from RPA-Python and the MCP server. Windows `tee` is still block-buffered; a live parent on Windows may need to wait or the launcher needs an equivalent there.
+The modern path does not pipe through `tee`. `tagui_write_output()` writes each line to stdout, flushes it, and appends the same bytes to `TAGUI_LOG` (`flow.log`). GNU `tee` and Windows `tee` block-buffer when stdout is a pipe, which hid the short live-mode banner from RPA-Python. The CasperJS path still uses `tee`. The Windows launcher (`src/tagui.cmd`) sets `TAGUI_LOG` and calls `php` the same way. That branch was read and not executed: this VM is Linux only.
 
 `phantomjs` is treated as `headless` under `modern`. `firefox` is rejected. `chrome` is a visible window. Any other browser value, including the default, is headless Chrome.
 
 ### Browser process
 
-`TaguiChrome` picks a binary in this order: `TAGUI_CHROME_BIN`, then `google-chrome-stable`, `/opt/google/chrome/chrome`, Chromium, Edge, and `google-chrome` last. The last position is deliberate. On this VM `/usr/local/bin/google-chrome` is a wrapper that forces port 9222 and a shared profile, which fights a private debugging port.
+`TaguiChrome` picks a binary in this order: `TAGUI_CHROME_BIN`, then `google-chrome-stable`, `/opt/google/chrome/chrome`, Chromium, Edge, and `google-chrome` last. The last position is deliberate. On this VM `/usr/local/bin/google-chrome` is a wrapper that forces port 9222 and a shared profile, which fights a private debugging port. After the Linux names it looks for app bundles under `/Applications`: Google Chrome, Chrome Canary, Edge, Edge Canary, Chromium, and Brave. Those paths are the same on Apple Silicon and Intel macOS. On Windows it looks for Chrome and Edge under `Program Files`, `Program Files (x86)`, and `%LOCALAPPDATA%`. The macOS and Windows lists were not executed here.
 
 The process gets a free port (`127.0.0.1:0`), a profile directory `tagui_modern_profile_<pid>_<hex>` under the temp dir, and `--remote-allow-origins=*` (Chrome 111 and later refuse the websocket without it). Headless uses `--headless=new`. Sandbox is off unless `TAGUI_CHROME_SANDBOX=1`, because containers and CI commonly cannot use the Chrome sandbox. `--no-sandbox` is the default here for that reason. Extra flags disable component extensions and default apps; a stock Chrome otherwise starts a background extension page and the first `/json/list` entry is not the about:blank tab.
 
@@ -162,19 +162,33 @@ Startup polls `/json/list` with a one-second HTTP timeout and prefers the `page`
 | `http://`, `https://`, `file://` | `Page.navigate`, then poll `document.readyState === "complete"` and a non-blank URL. Minimum wait budget 20 seconds |
 | `click` / `tap`, `rclick` / `rtap`, `dclick` / `dtap`, `hover` / `move` | resolve the locator, then `Input.dispatchMouseEvent` at the element center |
 | `type` / `enter` | focus, optional `[clear]`, `Input.insertText`, and key events for `[enter]`, `[tab]`, `[esc]`, `[space]` |
+| `select` / `choose` | set the matching `<option>` by value or text and dispatch `change`. `[clear]` selects the empty value |
+| `upload` | `DOM.setFileInputFiles` on the file input |
 | `read` / `fetch` | `read page to var` stores `outerHTML`. An element stores its text or input value |
-| `show` / `print` | `show page` prints `innerText`. The classic engine prints HTML here |
+| `show` / `print` | `show page` prints `show page -` plus `documentElement.outerHTML`, the same string `chrome.getHTML()` returns |
+| `save` / `write` / `load` | write page or element text to a file, append it, or read a file into a variable |
+| `table` | write a table, or an XPath or CSS list of rows, to csv |
+| `download` / `receive` | HTTP GET into a file. `receive` waits for a network response whose URL contains the keyword and prefers a `Document` response |
+| `api` | HTTP call from `api_config` when that variable is set. The body is `api_result` and parsed JSON is `api_json` |
+| `run` | a shell command, or a `run begin` / `run finish` block. Output is `run_result` |
 | `echo` | same quote and concatenation rules as the classic echo step. Mixed `'` and `"` is an error |
+| `check` | `check condition \| true-text \| false-text` prints one of the two texts |
+| `ask` | reads stdin into `ask_result`. A visible `chrome` window uses `prompt()` |
 | `snap` | `Page.captureScreenshot` of the page, or a clip of an element, to `snapN.png` or `snap ... to file` |
 | `wait` | numeric seconds, default 5, capped at 120. An element wait is still a flow-file feature of the classic engine |
 | `dump expr to file` | writes the value with no extra newline. Booleans are `true` and `false` |
 | `timeout N` | element-find budget in seconds, default 10 |
 | `dom <js>` | `Runtime.evaluate`, result stored in `dom_result` |
+| `frame name` | the next step or `{ }` block searches inside that frame. `name \| child` nests. Mouse coordinates add the frame's offset |
+| `popup keyword` | the next step or block attaches to the newest page target whose URL contains the keyword, then returns to the parent page |
 | `var = expr` and `var x = ...` | assignments. `exist()`, `present()`, `visible()`, `count()`, `title()`, `url()`, `text()` are calls. `.indexOf`, `.toString`, `.trim`, `.toLowerCase` are methods |
-| `` `name` `` | replaced with the variable's value before the step runs |
+| `` `expression` `` | a backtick pair is an expression, as in the classic parser. `echo `title()`` prints the title. On a click or type step the value is inserted into the line. Repository columns such as `[iteration]` are replaced first |
+| datatables | a csv argument is transposed the way `transpose.php` does. A sidecar `flow.csv` is read as columns. `tagui_local.csv` and `tagui_global.csv` fill object names. `[iteration]` is the dataset index. The next dataset waits 3 seconds unless `speed` is set |
 | `if` / `else if` / `else` | natural-language conditions and a parenthesized JavaScript-shaped condition |
 | `for n from A to B` and `for (n=1; n<=N; n++)` | integer range, `infinity` is 1024, ranges larger than 10000 are rejected |
-| `{` `}` | blocks, including a block as an if/for body |
+| `while` | re-checked each pass, stopped after 10000 iterations |
+| `break` / `continue` | leave or restart the enclosing `for` or `while` |
+| `{` `}` | blocks, including a block as an if/for/while/frame/popup body |
 | `live` | prints the classic banner and reads stdin until a line whose first characters are `done` |
 
 Flow mode polls for an element until `timeout`. Live mode looks once, matching `check_tx()` (no `waitFor`). A missing element in a flow stops the run, which is the classic `this.exit()` behavior. In live mode the error is printed and the next line is read. Errors in flow mode use `ERROR - [LINE n] ...` so the MCP server's line parser still matches. Quiet mode hides `START`, the step trace, and `FINISH`. `echo` and errors still print.
@@ -183,11 +197,17 @@ Flow mode polls for an element until `timeout`. Live mode looks once, matching `
 
 The process exits 0 after a completed run even when a step set `stopped`. It exits 1 when Chrome fails to start or the flow file is missing. That matches the classic launcher, which reports a successful Casper exit after a step error.
 
-### Steps that are not implemented
+### Steps that stay on the CasperJS engine
 
-`select`, `upload`, `download`, `table`, `check`, `frame`, `popup`, `api`, Python / R / vision / JavaScript blocks, keyboard and mouse Sikuli steps, datatables, `ask`, `test` / xUnit, `while`, `break`, and `continue`. An unknown step is `ERROR - cannot understand step ...` and, in flow mode, stops the run.
+`js`, `py`, `r`, `vision`, `test` / xUnit, `keyboard`, `mouse`, and Sikuli image steps (a `.png` or `.bmp` target, or a coordinate pair). The modern engine stops with `[LINE n]` and says the step stays on the CasperJS engine, or that the visual step needs Sikuli. It does not start `sikulix.jar`. That process needs a display and the separate SikuliX install, which this VM does not have, so a hand-off would not be verifiable here.
 
-`show page` returns visible text, not the HTML the classic engine echoes. Element `snap` clips to the element's box, but the verified screenshot is a full-page capture.
+Raw JavaScript outside the expression subset is also refused. `profile_name.replace(/ /g, "_")` in `a_facedetect` stops at `[LINE 13] unexpected token`. Non-English step keywords are not translated. `c_chineseflow` stops on the first Chinese line. The CasperJS engine still runs `translate.php` before parsing.
+
+`frame` and `popup` are flow-file blocks. In live mode they print that they are not supported there, which matches the CasperJS live-mode restriction.
+
+### One step table
+
+`src/tagui_steps.php` defines keyword order, code prefixes, and the locator attributes `id`, `name`, `class`, `title`, `aria-label`, `text`, `href`. `tagui_steps_javascript()` emits `tagui_keyword_intent()`, `tagui_is_code()`, `tagui_locator_attributes`, and `tagui_locator_xpath()` into the CasperJS script ahead of `tagui_header.js`. A PHP test checks the aliases. `node --check` accepts the generated functions, and the same inputs classify the same way in PHP and Node.
 
 ## Wiring that stayed compatible
 
@@ -198,23 +218,45 @@ The MCP server grew an optional engine selector and nothing else in the protocol
 - `browser_start(..., engine="")` accepts `casper` (default) or `modern`. An empty value follows `TAGUI_ENGINE`, then `casper`.
 - `live_command` appends `modern` only for that engine. `modern` is an allowed runner option and is not a browser name, so `headless modern` is valid.
 - The reaper also kills processes whose command line contains `tagui_modern_profile_`.
+- `run_flow` and `run_workspace_flow` accept `modern` in `options`. A missing element still returns `failing_line`, `failing_step`, `error_message`, and `screenshots`. `src/test/test_modern_repair.py` checks that against the modern engine.
 
 ## What was verified on this VM
 
-Linux, PHP 8.3.6 with `pcntl`, Chrome 154 (`google-chrome-stable`), `stdbuf` present. CasperJS and PhantomJS are not installed, so the old engine was not re-run here. Windows was not executed.
+Linux, PHP with `pcntl`, `google-chrome-stable`. CasperJS and PhantomJS are not installed, so the classic engine was not re-run. macOS and Windows were not executed.
 
-- `php -l src/tagui_modern.php` reports no syntax errors.
-- `php src/test/test_modern_logic.php` checks condition rewrite, both `for` forms, and a captured flow of `if` / `else` / `for` echoes (`fruits-yes`, `dozen`, `else-yes`, `n is 1` through `n is 3`).
-- A quiet headless flow against `src/test/fixtures/modern_page.html` then `https://example.com` echoed `Modern PoC`, typed `[clear]hello` into `name`, clicked `Go`, read `#out` back as `hello`, took the `title() contains "Modern"` branch, ran `for n from 1 to 2`, and echoed `Example Domain`. The page snap was a PNG, 1366 pixels wide. The run finished in about two seconds and exited 0. An earlier Chrome startup of about 60 seconds was the wrapper binary plus component-extension targets; the binary order and the extra disable flags removed that wait.
-- `python3 src/test/test_modern_live.py` passed the RPA-style exchange and `LiveSession(engine="modern")` (`echo "from mcp"`, `title()` dump equals `Modern PoC`). No `tagui_modern_profile_` Chrome was left behind.
-- `PYTHONPATH=src/tagui_mcp python3 -m pytest src/tagui_mcp/tests -q` passed 24 tests, including `test_live_command_selects_the_engine`. `pytest` and `mcp` are installed in the user environment for that run; they are not new project dependencies beyond what `src/tagui_mcp/pyproject.toml` already declares.
+- `php -l` reports no syntax errors in `src/tagui_modern.php`, `src/tagui_steps.php`, and `src/tagui_parse.php`. `bash -n src/tagui` passes.
+- `php src/test/test_modern_logic.php` covers condition rewrite, both `for` forms, `while` / `break`, datatable rows and `[iteration]`, `load` / `write`, `check`, and the shared keyword table.
+- `php src/test/test_modern_browser.php` runs a local fixture in headless Chrome: `select`, `upload`, `table`, `show page` (HTML, including `<title>Modern Steps</title>`), `frame`, `popup`, `run`, `api`, `download`, and `receive`. All checks passed.
+- `python3 src/test/test_modern_repair.py` runs `run_flow(..., options=["headless", "modern", "quiet"])` against a missing element. The result has `failing_line` 3, `failing_step` `click missing-button`, and a `snap1.png` path.
+- `python3 src/test/test_modern_live.py` passed the RPA-style exchange (`exist`, `type`, `click`, `read`, `url()`) and `LiveSession(engine="modern")`. The banner arrived without a `tee` pipe.
+- `PYTHONPATH=src/tagui_mcp python3 -m pytest src/tagui_mcp/tests -q` passed 24 tests.
+- `node --check` accepts the JavaScript emitted by `tagui_steps_javascript()`. The same nine sample lines classify identically in PHP and Node.
 
-## Gaps to close before a default flip
+### Sample parity
 
-- Step coverage listed above, especially `select`, frames, popups, file upload, and `run`.
-- One shared step table so `tagui_header.js` and the PHP engine do not diverge.
-- Windows live-mode output is not line-buffered.
-- Element-level `snap` is implemented and not separately asserted.
-- `show page` differs from the classic HTML echo.
-- Visual automation and Firefox stay on CasperJS / SlimerJS.
-- RPA-Python's installer still overlays the Tump files and still patches PhantomJS on macOS. Shipping `modern` as the default inside a Tump zip is a later step, after the flag has been used on real flows.
+`tagui <sample> modern quiet` on the flows in `src/samples`. "Locator missed" means Chrome opened the URL and a later selector was not on the live page. The classic engine could not be compared because CasperJS is not installed.
+
+| Sample | Modern engine |
+| --- | --- |
+| `4_conditions` | Passed. Condition echoes, `for`, `break` (1 through 5), and `continue` (1, 2, 4, 5) matched the flow |
+| `b_visualoutlook` | Reached `live` and printed the ready banner. The sample waits for stdin |
+| `1_yahoo` | Opened the URL, then `[LINE 27] cannot find search-box` |
+| `2_twitter` | `[LINE 12] cannot find ProfileAvatar` |
+| `3_github` | `[LINE 11] cannot find (//*[@class="numbers-summary"]/li)[5]` |
+| `5_repositories` | `[LINE 34] cannot find quick_email` |
+| `6A_datatables` | Ran both csv rows, then `[LINE 31] cannot find .public` on each |
+| `7_testing` | `[LINE 11] cannot find uh-tb-home` |
+| `8_hastebin` | `[LINE 11] js stays on the CasperJS engine` |
+| `a_facedetect` | `[LINE 13] unexpected token` on a JavaScript `.replace(/ /g, ...)` assignment |
+| `c_chineseflow` | `[LINE 19] cannot understand step` on an untranslated Chinese line |
+| `9_misc` | Produced no step error before a 25-second timeout during the first page load |
+
+## Phase 3
+
+Phase 3 would make `modern` the default for `headless` and `chrome`, with a `casper` flag for the old sequencer. It is not ready.
+
+The browser, logic, datatable, live-mode, and MCP repair paths above work, and the step table is shared. Flipping the default would still change every flow that uses `js`, `py`, `r`, `vision`, `dom` blocks that are not a single `dom` statement, Sikuli, a non-English keyword, or a JavaScript call outside the expression subset. Those stop with an error today instead of running. The live samples also fail on selectors the engine cannot tell apart from a missing step, and there is no side-by-side CasperJS run on this VM.
+
+Until then, callers opt in with `tagui flow.tag modern` or `modern` in the MCP `options` / `engine` field. The CasperJS engine remains the default. RPA-Python's installer still overlays the Tump files and still patches PhantomJS on macOS. Shipping `modern` as the default inside a Tump zip waits on that same flip.
+
+What is still untested: macOS Apple Silicon Chrome launch under `/Applications`, Windows `tagui.cmd` including the direct log write, element-clipped `snap` as its own assertion, and any sample against the CasperJS engine.

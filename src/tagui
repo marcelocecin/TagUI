@@ -230,13 +230,12 @@ if [ "$tagui_web_browser" = "firefox" ]; then echo "ERROR - modern engine does n
 if [ "$tagui_web_browser" = "phantomjs" ]; then tagui_web_browser="headless"; export tagui_web_browser; fi
 tagui_modern_args=()
 if [ "$#" -ge 2 ]; then tagui_modern_args=("${@:2}"); fi
-# line-buffer tee so live mode's short stdout lines reach a piped parent immediately
-if command -v stdbuf >/dev/null 2>&1; then
-php -q tagui_modern.php "$1" "${tagui_modern_args[@]}" | stdbuf -oL tee -a "$1".log
-else
-php -q tagui_modern.php "$1" "${tagui_modern_args[@]}" | tee -a "$1".log
-fi
-tagui_error_code=${PIPESTATUS[0]}
+# PHP writes the log itself and flushes each line, so a piped parent sees the live banner
+# without waiting on tee's block buffer. The same path is what Windows uses.
+export tagui_speed_mode
+export TAGUI_LOG="$1.log"
+php -q tagui_modern.php "$1" "${tagui_modern_args[@]}"
+tagui_error_code=$?
 cd "$initial_dir"
 exit $tagui_error_code
 fi

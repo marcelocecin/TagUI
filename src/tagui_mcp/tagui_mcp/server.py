@@ -65,8 +65,10 @@ def run_flow(
 
     flow_file is a local path. TagUI accepts no extension, or .txt, .js, or .tagui.
     options are CLI flags: chrome, headless, firefox, quiet, report, speed, debug,
-    test, baseline, upload. Omit options to run in quiet mode on TagUI's default
-    PhantomJS browser. Pass ["headless"] or ["chrome"] to use Chrome.
+    test, baseline, upload, modern. Omit options to run in quiet mode on TagUI's
+    default PhantomJS browser. Pass ["headless"] or ["chrome"] to use Chrome.
+    Add "modern" to drive Chrome through the DevTools engine instead of CasperJS.
+    A failing run still reports failing_line, failing_step, and screenshots.
     inputs become flow variables p1, p2, ... and cannot contain whitespace.
     options, inputs, and an optional datatable csv share TagUI's limit of 8 extra arguments.
     ok is false when the process fails, times out, or the output contains TagUI ERROR lines.

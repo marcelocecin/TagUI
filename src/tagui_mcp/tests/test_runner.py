@@ -94,6 +94,9 @@ def test_run_flow_rejects_bad_usage(tmp_path: Path) -> None:
     flow.write_text("echo hi\n", encoding="utf-8")
     option = run_flow(str(flow), options=["chrome", "headless"], tagui_bin=FAKE)
     assert option["ok"] is False
+    modern = run_flow(str(flow), options=["headless", "modern", "quiet"], tagui_bin=FAKE)
+    assert modern["ok"] is True
+    assert "modern" in modern["command"]
     unknown = run_flow(str(flow), options=["sudo"], tagui_bin=FAKE)
     assert unknown["ok"] is False
     spaced = run_flow(str(flow), inputs=["has space"], tagui_bin=FAKE)
