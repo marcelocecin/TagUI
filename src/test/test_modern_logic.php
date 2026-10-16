@@ -123,6 +123,46 @@ $files->stopped = false;
 $files->execute_range(array('check note equals to "saved-note" | "yes" | "no"'), 0, 0, true);
 expect('check true', $files->captured, array('yes'));
 
+class TaguiTitleStub {
+function title() {return 'Example Domain';}
+function url() {return 'https://example.com/';}}
+$ticks = new TaguiModern(new TaguiTitleStub(), true, '/tmp');
+$ticks->capture = true;
+$ticks->vars['name'] = 'hello world';
+$ticks->execute_range(array(
+'echo `name`',
+'echo `title()`',
+'echo \'backtick-\' `title()`',
+'page_title = `title()`',
+'echo page_title',
+'n = 2',
+'if `n` equals to 2',
+'echo "n-yes"'), 0, 7, true);
+expect('backtick echo', $ticks->captured, array('hello world', 'Example Domain', 'backtick-Example Domain', 'Example Domain', 'n-yes'));
+expect('backtick assign', $ticks->vars['page_title'], 'Example Domain');
+$ticks->vars['name'] = 'Go button';
+expect('click backtick', $ticks->expand_backticks('click `name`'), 'click Go button');
+expect('type backtick', $ticks->expand_backticks('type `name` as `page_title`'), 'type Go button as Example Domain');
+
+$ws_warnings = array();
+set_error_handler(function ($severity, $message) use (&$ws_warnings) {
+if ($severity === E_DEPRECATED || $severity === E_USER_DEPRECATED) {$ws_warnings[] = $message; return true;}
+return false;});
+new WebSocket\Client('ws://127.0.0.1:9', array('timeout' => 1));
+class TaguiWsProbe extends WebSocket\Base {
+function __construct() {
+$this->options = array('timeout' => 1, 'fragment_size' => 4096);
+$this->socket = fopen('php://memory', 'r+');
+fwrite($this->socket, chr(0x81) . chr(2) . 'hi');
+rewind($this->socket);
+$this->is_connected = true;}
+function pull() {return $this->receive_fragment();}}
+$probe = new TaguiWsProbe();
+expect('ws frame', $probe->pull(), 'hi');
+restore_error_handler();
+expect('ws deprecations', $ws_warnings, array());
+expect('ws options declared', property_exists('WebSocket\\Base', 'options'), true);
+
 if ($failures > 0) {fwrite(STDERR, "$failures failed\n"); exit(1);}
 fwrite(STDOUT, "all logic checks passed\n");
 exit(0);

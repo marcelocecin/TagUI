@@ -647,14 +647,14 @@ if ($trimmed === '' || str_starts_with($trimmed, '//')) {$i++; continue;}
 $i = $this->execute_statement($lines, $i, $end, $active);}}
 
 function execute_statement($lines, $i, $end, $active) {
-$line = $this->expand_backticks(trim($lines[$i]));
-$lower = strtolower($line);
+$raw = trim($lines[$i]);
+$lower = strtolower($raw);
 if ($lower === '{') {
 $close = $this->find_block_end($lines, $i, $end);
 if ($close < 0) {if ($active) $this->fail($i, 'number of step { does not tally with }'); return $end + 1;}
 if ($active) $this->execute_range($lines, $i + 1, $close - 1, true);
 return $close + 1;}
-if ($line === '}') {if ($active) $this->fail($i, 'unexpected }'); return $i + 1;}
+if ($raw === '}') {if ($active) $this->fail($i, 'unexpected }'); return $i + 1;}
 if ($lower === 'break' || $lower === 'break;') {if ($active) $this->jump = 'break'; return $i + 1;}
 if ($lower === 'continue' || $lower === 'continue;') {if ($active) $this->jump = 'continue'; return $i + 1;}
 if (str_starts_with($lower, 'if ')) return $this->execute_if($lines, $i, $end, $active);
@@ -662,7 +662,10 @@ if (str_starts_with($lower, 'for ') || str_starts_with($lower, 'for(')) return $
 if (str_starts_with($lower, 'while ') || str_starts_with($lower, 'while(')) return $this->execute_while($lines, $i, $end, $active);
 if (str_starts_with($lower, 'frame ') || $lower === 'frame') return $this->execute_frame($lines, $i, $end, $active);
 if (str_starts_with($lower, 'popup ') || $lower === 'popup') return $this->execute_popup($lines, $i, $end, $active);
-if ($active) $this->execute_step($line, $i);
+if ($active) {
+try {$line = $this->expand_backticks($raw);}
+catch (TaguiExprError $e) {$this->fail($i, $e->getMessage()); return $i + 1;}
+$this->execute_step($line, $i);}
 return $i + 1;}
 
 function execute_if($lines, $i, $end, $active) {
@@ -696,7 +699,9 @@ if ($next === null) return $i;
 return $this->execute_statement($lines, $next, $end, $active);}
 
 function execute_for($lines, $i, $end, $active) {
-$spec = $this->parse_for(trim($lines[$i]));
+try {$header = $this->expand_backticks(trim($lines[$i]));}
+catch (TaguiExprError $e) {if ($active) $this->fail($i, $e->getMessage()); return $i + 1;}
+$spec = $this->parse_for($header);
 if ($spec === null) {if ($active) $this->fail($i, 'invalid for loop - ' . trim($lines[$i])); return $i + 1;}
 $body = $this->next_code($lines, $i + 1, $end);
 if ($body === null) return $end + 1;
@@ -770,9 +775,10 @@ $raw = fgets(STDIN);
 if ($raw === false) break;
 $raw = rtrim($raw, "\r\n");
 if (str_starts_with($raw, 'done')) break;
+try {
 $line = $this->expand_backticks(trim($raw));
 if ($line === '' || str_starts_with($line, '//')) continue;
-try {$this->execute_step($line, -1);}
+$this->execute_step($line, -1);}
 catch (Exception $e) {$this->emit('ERROR - ' . $e->getMessage());}}
 $this->live = false;}
 
@@ -1004,12 +1010,21 @@ return preg_replace('/\+{2,}/', '+', $out);}
 
 function expand_backticks($line) {
 $line = tagui_apply_repository($line, $this->repo);
+$count = substr_count($line, '`');
+if ($count < 2 || ($count % 2) === 1) return $line;
+$keep = $this->backtick_expression_line($line);
 $engine = $this;
-$expanded = preg_replace_callback('/`([A-Za-z_][A-Za-z0-9_]*)`/', function ($match) use ($engine) {
-$name = $match[1];
-if (!array_key_exists($name, $engine->vars)) return $match[0];
-return $engine->stringish($engine->vars[$name]);}, $line);
+$expanded = preg_replace_callback('/`([^`]*)`/', function ($match) use ($engine, $keep) {
+$inner = $match[1];
+if ($inner === '') return $keep ? "''" : '';
+if ($keep) return "''+(" . $inner . ")+''";
+return $engine->stringish($engine->expr($inner));}, $line);
 return $expanded === null ? $line : $expanded;}
+
+function backtick_expression_line($line) {
+$lower = strtolower(ltrim($line));
+if (preg_match('/^(echo|dump|check|write|save|if|else if|while)\b/', $lower)) return true;
+return $this->is_assignment($line);}
 
 function need($locator, $index) {
 if (!$this->require_chrome($index)) return null;

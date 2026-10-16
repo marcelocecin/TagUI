@@ -182,7 +182,7 @@ Startup polls `/json/list` with a one-second HTTP timeout and prefers the `page`
 | `frame name` | the next step or `{ }` block searches inside that frame. `name \| child` nests. Mouse coordinates add the frame's offset |
 | `popup keyword` | the next step or block attaches to the newest page target whose URL contains the keyword, then returns to the parent page |
 | `var = expr` and `var x = ...` | assignments. `exist()`, `present()`, `visible()`, `count()`, `title()`, `url()`, `text()` are calls. `.indexOf`, `.toString`, `.trim`, `.toLowerCase` are methods |
-| `` `name` `` | replaced with the variable's value, then with a datatable or repository column, before the step runs |
+| `` `expression` `` | a backtick pair is an expression, as in the classic parser. `echo `title()`` prints the title. On a click or type step the value is inserted into the line. Repository columns such as `[iteration]` are replaced first |
 | datatables | a csv argument is transposed the way `transpose.php` does. A sidecar `flow.csv` is read as columns. `tagui_local.csv` and `tagui_global.csv` fill object names. `[iteration]` is the dataset index. The next dataset waits 3 seconds unless `speed` is set |
 | `if` / `else if` / `else` | natural-language conditions and a parenthesized JavaScript-shaped condition |
 | `for n from A to B` and `for (n=1; n<=N; n++)` | integer range, `infinity` is 1024, ranges larger than 10000 are rejected |

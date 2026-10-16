@@ -17,6 +17,7 @@ $flow = $work . '/steps_flow';
 $page_url = 'file://' . $page;
 file_put_contents($flow, implode("\n", array(
 $page_url,
+'echo \'backtick-\' `title()`',
 'select color as Blue',
 'dom return document.querySelector("#color").value',
 'echo dom_result',
@@ -60,6 +61,7 @@ fwrite(STDERR, "FAIL $label\n$detail\n");}
 
 check('exit', $code === 0, "exit $code\n$stderr\n$stdout");
 check('select', str_contains($stdout, "\nblue\n") || str_starts_with($stdout, "blue\n"), $stdout);
+check('backtick title', str_contains($stdout, 'backtick-Modern Steps'), $stdout);
 check('upload', str_contains($stdout, "\n1\n"), $stdout);
 check('table', is_file($table) && str_contains((string)file_get_contents($table), 'A') && str_contains((string)file_get_contents($table), '1'), (string)@file_get_contents($table));
 check('show page html', str_contains($stdout, 'show page -') && str_contains($stdout, '<title>Modern Steps</title>'), substr($stdout, 0, 500));

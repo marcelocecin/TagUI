@@ -304,7 +304,7 @@ $text = '';
 if (strcasecmp($target, 'page') === 0) {
 if (!$this->require_chrome($index)) return;
 $text = $this->chrome->page_html();}
-else if ($split !== false && preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $target) && !$this->looks_like_locator($target)) {
+else if ($split !== false && $this->is_value_expression($target)) {
 try {$text = $this->stringish($this->expr($target));}
 catch (TaguiExprError $e) {$this->fail($index, $e->getMessage()); return;}}
 else {
@@ -437,7 +437,8 @@ function integration_gap($intent, $index) {
 $this->fail($index, $intent . ' stays on the CasperJS engine');}
 
 function execute_frame($lines, $i, $end, $active) {
-$line = trim($lines[$i]);
+try {$line = $this->expand_backticks(trim($lines[$i]));}
+catch (TaguiExprError $e) {if ($active) $this->fail($i, $e->getMessage()); return $i + 1;}
 $params = trim(substr($line, strpos($line, ' ') + 1));
 if ($params === '' || strcasecmp($params, 'frame') === 0) {$this->fail($i, 'name missing for ' . $line); return $i + 1;}
 if ($active && !$this->require_chrome($i)) return $i + 1;
@@ -457,7 +458,8 @@ while ($pushed > 0) {try {$this->chrome->pop_frame();} catch (Exception $e) {} $
 return $after;}
 
 function execute_popup($lines, $i, $end, $active) {
-$line = trim($lines[$i]);
+try {$line = $this->expand_backticks(trim($lines[$i]));}
+catch (TaguiExprError $e) {if ($active) $this->fail($i, $e->getMessage()); return $i + 1;}
 $params = trim(substr($line, strpos($line, ' ') + 1));
 if ($params === '' || strcasecmp($params, 'popup') === 0) {$this->fail($i, 'keyword missing for ' . $line); return $i + 1;}
 if ($active && !$this->require_chrome($i)) return $i + 1;
@@ -474,7 +476,8 @@ if ($opened) {try {$this->chrome->pop_popup();} catch (Exception $e) {}}
 return $after;}
 
 function execute_while($lines, $i, $end, $active) {
-$line = trim($lines[$i]);
+try {$line = $this->expand_backticks(trim($lines[$i]));}
+catch (TaguiExprError $e) {if ($active) $this->fail($i, $e->getMessage()); return $i + 1;}
 if ($this->live) {$this->fail($i, 'while is not supported in live mode. Put it in a flow file.'); return $i + 1;}
 $body = $this->next_code($lines, $i + 1, $end);
 if ($body === null) return $end + 1;
@@ -499,6 +502,10 @@ $left = trim(substr($params, 0, $split));
 $right = trim(substr($params, $split + strlen($keyword)));
 if ($left === '' || $right === '') return null;
 return array($left, $right);}
+
+function is_value_expression($target) {
+if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $target)) return true;
+return str_contains($target, "''+(") || str_contains($target, "'+");}
 
 function looks_like_locator($target) {
 return str_contains($target, ' ') || str_contains($target, '#') || str_contains($target, '.')
