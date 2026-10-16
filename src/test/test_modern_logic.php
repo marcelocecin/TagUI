@@ -163,6 +163,68 @@ restore_error_handler();
 expect('ws deprecations', $ws_warnings, array());
 expect('ws options declared', property_exists('WebSocket\\Base', 'options'), true);
 
+$js = new TaguiModern(null, true, '/tmp');
+$js->capture = true;
+$js->execute_range(array(
+'profile_name = "Tan Kay Chen"',
+'profile_name = profile_name.replace(/ /g,"_")',
+'echo profile_name',
+'js begin',
+'profile_name = profile_name.replace(/_/g, "-")',
+'js finish',
+'echo profile_name'), 0, 6, true);
+expect('js replace', $js->captured, array('Tan_Kay_Chen', 'Tan-Kay-Chen'));
+expect('js stopped', $js->stopped, false);
+TaguiHelpers::shutdown();
+
+$py = new TaguiModern(null, true, '/tmp');
+$py->capture = true;
+$py->execute_range(array(
+'py a = 40',
+'py print(a + 2)',
+'echo py_result',
+'py begin',
+'print(a * 6)',
+'py finish',
+'echo py_result'), 0, 6, true);
+expect('py result', $py->captured, array('42', '240'));
+expect('py json', $py->vars['py_json'], 240);
+expect('py stopped', $py->stopped, false);
+TaguiHelpers::shutdown();
+
+$pybad = new TaguiModern(null, true, '/tmp');
+$pybad->capture = true;
+$pybad->execute_range(array('py print(no_such_name)', 'echo py_result'), 0, 1, true);
+expect('py error continues', $pybad->stopped, false);
+expect('py error text', str_contains($pybad->captured[0], 'ERROR -'), true);
+TaguiHelpers::shutdown();
+
+$r = new TaguiModern(null, true, '/tmp');
+$r->capture = true;
+putenv('TAGUI_RSCRIPT=');
+$r->execute_range(array('r print(1)'), 0, 0, true);
+expect('r missing', $r->stopped, true);
+expect('r message', str_contains($r->captured[0], 'Rscript'), true);
+TaguiHelpers::shutdown();
+
+$zh = tagui_translate_lines(array('输入 search-box 为 github', '如果 cupcakes 多过或等于 12'), 'chinese');
+expect('zh type', $zh[0], 'type search-box as github');
+expect('zh if', $zh[1], 'if cupcakes more than or equals to 12');
+$zh_engine = new TaguiModern(null, true, '/tmp');
+$zh_engine->capture = true;
+$spoken = tagui_translate_lines(array('回声 "nihao"'), 'chinese');
+$zh_engine->execute_range($spoken, 0, 0, true);
+expect('zh echo', $zh_engine->captured, array('nihao'));
+
+$visual = new TaguiModern(null, true, '/tmp');
+$visual->capture = true;
+putenv('TAGUI_SIKULI_JAR=/tmp/tagui-missing-oculix.jar');
+$visual->execute_range(array('vision print(1)'), 0, 0, true);
+expect('sikuli missing', $visual->stopped, true);
+expect('sikuli message', str_contains($visual->captured[0], 'OculiX'), true);
+expect('sikuli no snap word', str_contains($visual->captured[0], 'cannot find '), false);
+putenv('TAGUI_SIKULI_JAR');
+
 if ($failures > 0) {fwrite(STDERR, "$failures failed\n"); exit(1);}
 fwrite(STDOUT, "all logic checks passed\n");
 exit(0);
