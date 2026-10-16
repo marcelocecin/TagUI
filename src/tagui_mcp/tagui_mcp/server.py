@@ -110,14 +110,15 @@ def run_steps(
 
 
 @mcp.tool()
-def browser_start(mode: str = "headless", startup_timeout: float = 90) -> str:
+def browser_start(mode: str = "headless", startup_timeout: float = 90, engine: str = "") -> str:
     """Start a live TagUI Chrome session for later browser tools.
 
-    mode is "headless" (default) or "chrome" (visible window). The session keeps
-    one browser open so later steps share page state. Requires Chrome, plus the
-    PHP, CasperJS, and PhantomJS dependencies TagUI's live mode already uses.
+    mode is "headless" (default) or "chrome" (visible window). engine is "casper"
+    (default, CasperJS plus PhantomJS) or "modern" (Chrome DevTools, no CasperJS).
+    An empty engine follows TAGUI_ENGINE, then casper. The session keeps one
+    browser open so later steps share page state.
     """
-    return _json(get_service().browser_start(mode, startup_timeout=startup_timeout))
+    return _json(get_service().browser_start(mode, startup_timeout=startup_timeout, engine=engine))
 
 
 @mcp.tool()

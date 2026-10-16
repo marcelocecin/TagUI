@@ -29,6 +29,7 @@ ALLOWED_OPTIONS = frozenset(
         "debug",
         "test",
         "baseline",
+        "modern",
     }
 )
 BROWSER_OPTIONS = frozenset({"chrome", "headless", "firefox"})
@@ -298,7 +299,8 @@ def reap_tagui_chrome() -> None:
     for line in listed.stdout.splitlines():
         chrome = "remote-debugging-port=9222" in line and "tagui_user_profile" in line
         helper = "tagui_chrome.php" in line
-        if not chrome and not helper:
+        modern = "tagui_modern_profile_" in line
+        if not chrome and not helper and not modern:
             continue
         pid_text = line.strip().split(maxsplit=1)[0]
         if not pid_text.isdigit():

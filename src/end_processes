@@ -14,6 +14,15 @@ while true; do
 done
 
 while true; do
+    chrome_process_id="$(ps x | grep tagui_modern_profile_ | grep -v 'grep tagui_modern_profile_' | sed -e 's/^[ ]*//' | cut -d' ' -f 1 | sort -nur | head -n 1)"
+    if [ -n "$chrome_process_id" ]; then
+        kill $chrome_process_id > /dev/null 2>&1
+    else
+        break
+    fi
+done
+
+while true; do
     chrome_process_id="$(ps x | grep remote-debugging-port=9222 | grep tagui_user_profile | grep window-size | sed -e 's/^[ ]*//' | cut -d' ' -f 1 | sort -nur | head -n 1)"
     if [ -n "$chrome_process_id" ]; then
         kill $chrome_process_id > /dev/null 2>&1

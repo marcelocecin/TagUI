@@ -49,6 +49,24 @@ def browser_flag(mode: BrowserMode) -> str:
     _never(mode)
 
 
+def normalize_engine(engine: str | None) -> str:
+    """Return casper or modern. Empty means the TAGUI_ENGINE environment variable, then casper."""
+    chosen = engine if engine else os.environ.get("TAGUI_ENGINE", "")
+    if chosen is None or chosen == "" or chosen == "casper":
+        return "casper"
+    if chosen == "modern":
+        return "modern"
+    raise TaguiFailure("engine must be 'casper' or 'modern'")
+
+
+def live_command(executable: str | Path, flow: str | Path, mode: BrowserMode, engine: str | None = None) -> list[str]:
+    """Command line for a live session. modern appends the opt-in DevTools engine flag."""
+    command = [str(executable), str(flow), browser_flag(mode), "quiet"]
+    if normalize_engine(engine) == "modern":
+        command.append("modern")
+    return command
+
+
 class LiveSession:
     """One TagUI live-mode process. Not safe to share across threads without a lock."""
 
@@ -82,7 +100,7 @@ class LiveSession:
     def workdir(self) -> Path | None:
         return self._workdir
 
-    def start(self, mode: BrowserMode, startup_timeout: float = 90) -> None:
+    def start(self, mode: BrowserMode, startup_timeout: float = 90, engine: str | None = None) -> None:
         if self.running:
             raise TaguiFailure("browser session already running; call browser_stop first")
         self._reap()
@@ -92,7 +110,7 @@ class LiveSession:
         flow_path = self._workdir / "mcp_live"
         flow_path.write_text("// TagUI MCP live session\nlive\n", encoding="utf-8")
         executable = resolve_tagui_executable(self._tagui_bin)
-        command = [str(executable), str(flow_path), browser_flag(mode), "quiet"]
+        command = live_command(executable, flow_path, mode, engine)
         try:
             self._proc = subprocess.Popen(
                 command,

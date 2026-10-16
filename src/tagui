@@ -10,6 +10,7 @@ echo "tagui v5.27: use following options and this syntax to run - ./tagui flow_f
 echo
 echo "chrome   - run on visible Chrome web browser instead of invisible PhantomJS (first install Chrome)"
 echo "headless - run on invisible Chrome web browser instead of default PhantomJS (first install Chrome)"
+echo "modern   - run on Chrome through the DevTools Protocol, without CasperJS or PhantomJS"
 echo "firefox  - run on visible Firefox web browser instead of invisible PhantomJS (first install Firefox)"
 echo "report   - track run result in tagui/src/tagui_report.csv and save html log of automation execution"
 echo "upload   - upload automation flow and result to hastebin.com (expires 30 days after last view)"
@@ -180,6 +181,17 @@ if [ "$7" = "speed" ]; then set -- "${@:1:6}" "${@:8}"; tagui_speed_mode=true; f
 if [ "$8" = "speed" ]; then set -- "${@:1:7}" "${@:9}"; tagui_speed_mode=true; fi
 if [ "$9" = "speed" ]; then set -- "${@:1:8}"; tagui_speed_mode=true; fi
 
+tagui_modern_mode=false
+# opt-in Chrome DevTools engine. CasperJS remains the default when this flag is absent.
+if [ "$2" = "modern" ]; then set -- "$1" "${@:3}"; tagui_modern_mode=true; fi
+if [ "$3" = "modern" ]; then set -- "${@:1:2}" "${@:4}"; tagui_modern_mode=true; fi
+if [ "$4" = "modern" ]; then set -- "${@:1:3}" "${@:5}"; tagui_modern_mode=true; fi
+if [ "$5" = "modern" ]; then set -- "${@:1:4}" "${@:6}"; tagui_modern_mode=true; fi
+if [ "$6" = "modern" ]; then set -- "${@:1:5}" "${@:7}"; tagui_modern_mode=true; fi
+if [ "$7" = "modern" ]; then set -- "${@:1:6}" "${@:8}"; tagui_modern_mode=true; fi
+if [ "$8" = "modern" ]; then set -- "${@:1:7}" "${@:9}"; tagui_modern_mode=true; fi
+if [ "$9" = "modern" ]; then set -- "${@:1:8}"; tagui_modern_mode=true; fi
+
 # flow inputs are forwarded later as separate arguments, including values past $9
 # and values that contain spaces. Joining $2-$9 into one string split those apart.
 
@@ -211,6 +223,23 @@ if [ -f "tagui_chrome.out" ]; then rm tagui_chrome.out; fi
 
 # default exit code 0 to mean no error parsing automation flow file
 tagui_error_code=0
+
+# modern engine owns Chrome itself and does not call CasperJS or PhantomJS
+if [ "$tagui_modern_mode" = true ]; then
+if [ "$tagui_web_browser" = "firefox" ]; then echo "ERROR - modern engine does not support firefox" | tee -a "$1".log; exit 1; fi
+if [ "$tagui_web_browser" = "phantomjs" ]; then tagui_web_browser="headless"; export tagui_web_browser; fi
+tagui_modern_args=()
+if [ "$#" -ge 2 ]; then tagui_modern_args=("${@:2}"); fi
+# line-buffer tee so live mode's short stdout lines reach a piped parent immediately
+if command -v stdbuf >/dev/null 2>&1; then
+php -q tagui_modern.php "$1" "${tagui_modern_args[@]}" | stdbuf -oL tee -a "$1".log
+else
+php -q tagui_modern.php "$1" "${tagui_modern_args[@]}" | tee -a "$1".log
+fi
+tagui_error_code=${PIPESTATUS[0]}
+cd "$initial_dir"
+exit $tagui_error_code
+fi
 
 # transpose datatable csv file if file to be transposed exists
 if [ -f "$1_transpose".csv ]; then php -q transpose.php "$1_transpose".csv | tee -a "$1".log; fi

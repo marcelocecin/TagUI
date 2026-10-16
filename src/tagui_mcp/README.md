@@ -15,9 +15,9 @@ The MCP package does not vendor TagUI's engines. A packaged TagUI install (or a 
 - The `tagui` script, normally `src/tagui` in this repository
 - PHP CLI (`php`), used to translate a flow
 - CasperJS and PhantomJS, used to execute the translated script
-- Google Chrome on `PATH` as `google-chrome` for `headless` or `chrome` runs and for every live browser tool
+- Google Chrome or Edge for `headless` or `chrome` runs and for every live browser tool
 
-`run_flow` / `run_steps` with no browser flag use TagUI's default PhantomJS browser. `browser_*` tools always start live mode with Chrome, because live-mode navigation only works there.
+`run_flow` / `run_steps` with no browser flag use TagUI's default PhantomJS browser. `browser_*` tools always start live mode with Chrome, because live-mode navigation only works there. Pass `"engine": "modern"` to `browser_start`, or `modern` in `options` for `run_flow` / `run_steps`, to use the DevTools engine in `src/tagui_modern.php` instead of CasperJS and PhantomJS. `TAGUI_ENGINE=modern` does the same for `browser_start` when `engine` is omitted. See `docs/modern-engine.md`.
 
 ## Install
 
@@ -111,7 +111,7 @@ The repair loop is `create_flow` or `save_flow`, `validate_flow`, `run_workspace
 | `run_flow` | Run any flow file. Optional `options` (`quiet`, `headless`, `chrome`, `firefox`, `report`, `speed`, `debug`, `test`, `baseline`, `upload`), `inputs` (p1–p16), `datatable` (a csv), `timeout_seconds` |
 | `run_steps` | Write ad-hoc TagUI lines to a flow and run them. Returns `work_directory`, which is kept |
 | `save_session` | Write the live transcript to a workspace flow. `only_successful` drops steps that returned `ERROR` |
-| `browser_start` | Start live mode on headless Chrome (`mode`: `headless` or `chrome`) |
+| `browser_start` | Start live mode on headless Chrome (`mode`: `headless` or `chrome`). `engine`: `casper` (default) or `modern` |
 | `browser_stop` | Send `done`, stop TagUI, and close TagUI's Chrome |
 | `browser_go` | Open an `http` or `https` URL and poll until the page location changes |
 | `browser_click` | `click <selector>` using TagUI's identifier rules (xpath, css, id, name, class, text, href) |
