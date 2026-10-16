@@ -192,45 +192,25 @@ return front_script_line_return+script_line.trim()+back_script_line_return;}
 function is_xpath_selector(selector) {if (selector.length == 0) return false;
 if ((selector.indexOf('/') == 0) || (selector.indexOf('(') == 0)) return true; return false;}
 
-// for finding best match for given locator
+// locator attribute order comes from tagui_steps.php (tagui_locator_attributes)
 function tx(locator) {if (is_xpath_selector(locator)) return xps666(locator);
 if (casper.exists(locator)) return locator; // check for css locator
-// first check for exact match then check for containing string
-if (casper.exists(xps666('//*[@id="'+locator+'"]'))) return xps666('//*[@id="'+locator+'"]');
-if (casper.exists(xps666('//*[contains(@id,"'+locator+'")]'))) return xps666('//*[contains(@id,"'+locator+'")]');
-if (casper.exists(xps666('//*[@name="'+locator+'"]'))) return xps666('//*[@name="'+locator+'"]');
-if (casper.exists(xps666('//*[contains(@name,"'+locator+'")]'))) return xps666('//*[contains(@name,"'+locator+'")]');
-if (casper.exists(xps666('//*[@class="'+locator+'"]'))) return xps666('//*[@class="'+locator+'"]');
-if (casper.exists(xps666('//*[contains(@class,"'+locator+'")]'))) return xps666('//*[contains(@class,"'+locator+'")]');
-if (casper.exists(xps666('//*[@title="'+locator+'"]'))) return xps666('//*[@title="'+locator+'"]');
-if (casper.exists(xps666('//*[contains(@title,"'+locator+'")]'))) return xps666('//*[contains(@title,"'+locator+'")]');
-if (casper.exists(xps666('//*[@aria-label="'+locator+'"]'))) return xps666('//*[@aria-label="'+locator+'"]');
-if (casper.exists(xps666('//*[contains(@aria-label,"'+locator+'")]'))) return xps666('//*[contains(@aria-label,"'+locator+'")]');
-if (casper.exists(xps666('//*[text()="'+locator+'"]'))) return xps666('//*[text()="'+locator+'"]');
-if (casper.exists(xps666('//*[contains(text(),"'+locator+'")]'))) return xps666('//*[contains(text(),"'+locator+'")]');
-if (casper.exists(xps666('//*[@href="'+locator+'"]'))) return xps666('//*[@href="'+locator+'"]');
-if (casper.exists(xps666('//*[contains(@href,"'+locator+'")]'))) return xps666('//*[contains(@href,"'+locator+'")]');
+var attrs = tagui_locator_attributes; var i;
+for (i = 0; i < attrs.length; i++) {
+var exact = tagui_locator_xpath(locator, attrs[i], false);
+if (casper.exists(xps666(exact))) return xps666(exact);
+var loose = tagui_locator_xpath(locator, attrs[i], true);
+if (casper.exists(xps666(loose))) return xps666(loose);}
 return xps666('/html');}
 
 // for checking if given locator is found
 function check_tx(locator) {if (is_xpath_selector(locator))
 {if (casper.exists(xps666(locator))) return true; else return false;}
 if (casper.exists(locator)) return true; // check for css locator
-// first check for exact match then check for containing string
-if (casper.exists(xps666('//*[@id="'+locator+'"]'))) return true;
-if (casper.exists(xps666('//*[contains(@id,"'+locator+'")]'))) return true;
-if (casper.exists(xps666('//*[@name="'+locator+'"]'))) return true;
-if (casper.exists(xps666('//*[contains(@name,"'+locator+'")]'))) return true;
-if (casper.exists(xps666('//*[@class="'+locator+'"]'))) return true;
-if (casper.exists(xps666('//*[contains(@class,"'+locator+'")]'))) return true;
-if (casper.exists(xps666('//*[@title="'+locator+'"]'))) return true;
-if (casper.exists(xps666('//*[contains(@title,"'+locator+'")]'))) return true;
-if (casper.exists(xps666('//*[@aria-label="'+locator+'"]'))) return true;
-if (casper.exists(xps666('//*[contains(@aria-label,"'+locator+'")]'))) return true;
-if (casper.exists(xps666('//*[text()="'+locator+'"]'))) return true;
-if (casper.exists(xps666('//*[contains(text(),"'+locator+'")]'))) return true;
-if (casper.exists(xps666('//*[@href="'+locator+'"]'))) return true;
-if (casper.exists(xps666('//*[contains(@href,"'+locator+'")]'))) return true;
+var attrs = tagui_locator_attributes; var i;
+for (i = 0; i < attrs.length; i++) {
+if (casper.exists(xps666(tagui_locator_xpath(locator, attrs[i], false)))) return true;
+if (casper.exists(xps666(tagui_locator_xpath(locator, attrs[i], true)))) return true;}
 return false;}
 
 /**
@@ -798,105 +778,12 @@ function get_intent(raw_intent) {var lc_raw_intent = raw_intent.toLowerCase();
 if (inside_py_block !== 0) return 'py'; if (inside_r_block !== 0) return 'r';
 if (inside_run_block !== 0) return 'run'; if (inside_vision_block !== 0) return 'vision';
 if (inside_js_block !== 0) return 'js'; if (inside_dom_block !== 0) return 'dom';
-
-if (lc_raw_intent.substr(0,7) == 'http://' || lc_raw_intent.substr(0,8) == 'https://') return 'url';
-
-// first set of conditions check for valid keywords with their parameters
-if ((lc_raw_intent.substr(0,4) == 'tap ') || (lc_raw_intent.substr(0,6) == 'click ')) return 'tap';
-if ((lc_raw_intent.substr(0,5) == 'rtap ') || (lc_raw_intent.substr(0,7) == 'rclick ')) return 'rtap';
-if ((lc_raw_intent.substr(0,5) == 'dtap ') || (lc_raw_intent.substr(0,7) == 'dclick ')) return 'dtap';
-if ((lc_raw_intent.substr(0,6) == 'hover ') || (lc_raw_intent.substr(0,5) == 'move ')) return 'hover';
-if ((lc_raw_intent.substr(0,5) == 'type ') || (lc_raw_intent.substr(0,6) == 'enter ')) return 'type';
-if ((lc_raw_intent.substr(0,7) == 'select ') || (lc_raw_intent.substr(0,7) == 'choose ')) return 'select';
-if ((lc_raw_intent.substr(0,5) == 'read ') || (lc_raw_intent.substr(0,6) == 'fetch ')) return 'read';
-if ((lc_raw_intent.substr(0,5) == 'show ') || (lc_raw_intent.substr(0,6) == 'print ')) return 'show';
-if ((lc_raw_intent.substr(0,3) == 'up ') || (lc_raw_intent.substr(0,7) == 'upload ')) return 'upload';
-if ((lc_raw_intent.substr(0,5) == 'down ') || (lc_raw_intent.substr(0,9) == 'download ')) return 'down';
-if (lc_raw_intent.substr(0,8) == 'receive ') return 'receive';
-if (lc_raw_intent.substr(0,5) == 'echo ') return 'echo';
-if (lc_raw_intent.substr(0,5) == 'save ') return 'save';
-if (lc_raw_intent.substr(0,5) == 'dump ') return 'dump';
-if (lc_raw_intent.substr(0,6) == 'write ') return 'write';
-if (lc_raw_intent.substr(0,5) == 'load ') return 'load';
-if (lc_raw_intent.substr(0,5) == 'snap ') return 'snap';
-if (lc_raw_intent.substr(0,6) == 'table ') return 'table';
-if (lc_raw_intent.substr(0,5) == 'wait ') return 'wait';
-if (lc_raw_intent.substr(0,5) == 'live ') return 'live';
-if (lc_raw_intent.substr(0,4) == 'ask ') return 'ask';
-if (lc_raw_intent.substr(0,9) == 'keyboard ') return 'keyboard';
-if (lc_raw_intent.substr(0,6) == 'mouse ') return 'mouse';
-if (lc_raw_intent.substr(0,6) == 'check ') return 'check';
-if (lc_raw_intent.substr(0,5) == 'test ') return 'test';
-if (lc_raw_intent.substr(0,6) == 'frame ') return 'frame';
-if (lc_raw_intent.substr(0,6) == 'popup ') return 'popup';
-if (lc_raw_intent.substr(0,4) == 'api ') return 'api';
-if (lc_raw_intent.substr(0,4) == 'run ') return 'run';
-if (lc_raw_intent.substr(0,4) == 'dom ') return 'dom';
-if (lc_raw_intent.substr(0,3) == 'js ') return 'js';
-if (lc_raw_intent.substr(0,2) == 'r ') return 'r';
-if (lc_raw_intent.substr(0,3) == 'py ') return 'py';
-if (lc_raw_intent.substr(0,7) == 'vision ') return 'vision';
-if (lc_raw_intent.substr(0,8) == 'timeout ') return 'timeout';
-
-// second set of conditions check for valid keywords with missing parameters
-if ((lc_raw_intent == 'tap') || (lc_raw_intent == 'click')) return 'tap';
-if ((lc_raw_intent == 'rtap') || (lc_raw_intent == 'rclick')) return 'rtap';
-if ((lc_raw_intent == 'dtap') || (lc_raw_intent == 'dclick')) return 'dtap';
-if ((lc_raw_intent == 'hover') || (lc_raw_intent == 'move')) return 'hover';
-if ((lc_raw_intent == 'type') || (lc_raw_intent == 'enter')) return 'type';
-if ((lc_raw_intent == 'select') || (lc_raw_intent == 'choose')) return 'select';
-if ((lc_raw_intent == 'read') || (lc_raw_intent == 'fetch')) return 'read';
-if ((lc_raw_intent == 'show') || (lc_raw_intent == 'print')) return 'show';
-if ((lc_raw_intent == 'up') || (lc_raw_intent == 'upload')) return 'upload';
-if ((lc_raw_intent == 'down') || (lc_raw_intent == 'download')) return 'down';
-if (lc_raw_intent == 'receive') return 'receive';
-if (lc_raw_intent == 'echo') return 'echo';
-if (lc_raw_intent == 'save') return 'save';
-if (lc_raw_intent == 'dump') return 'dump';
-if (lc_raw_intent == 'write') return 'write';
-if (lc_raw_intent == 'load') return 'load';
-if (lc_raw_intent == 'snap') return 'snap';
-if (lc_raw_intent == 'table') return 'table';
-if (lc_raw_intent == 'wait') return 'wait';
-if (lc_raw_intent == 'live') return 'live';
-if (lc_raw_intent == 'ask') return 'ask';
-if (lc_raw_intent == 'keyboard') return 'keyboard';
-if (lc_raw_intent == 'mouse') return 'mouse';
-if (lc_raw_intent == 'check') return 'check';
-if (lc_raw_intent == 'test') return 'test';
-if (lc_raw_intent == 'frame') return 'frame';
-if (lc_raw_intent == 'popup') return 'popup';
-if (lc_raw_intent == 'api') return 'api';
-if (lc_raw_intent == 'run') return 'run';
-if (lc_raw_intent == 'dom') return 'dom';
-if (lc_raw_intent == 'js') return 'js';
-if (lc_raw_intent == 'r') return 'r';
-if (lc_raw_intent == 'py') return 'py';
-if (lc_raw_intent == 'vision') return 'vision';
-if (lc_raw_intent == 'timeout') return 'timeout';
-
-// final check for recognized code before returning error
+// aliases and the code predicate are generated from tagui_steps.php
+var shared = (typeof tagui_keyword_intent === 'function') ? tagui_keyword_intent(raw_intent) : '';
+if (shared) return shared;
 if (is_code(raw_intent)) return 'code'; else return 'error';}
 
-function is_code(raw_intent) {
-// due to asynchronous waiting for element, if/for/while can work for parsing single step
-// other scenarios can be assumed to behave as unparsed javascript in casperjs context
-// to let if/for/while handle multiple steps/code use the { and } steps to define block
-if ((raw_intent.substr(0,4) == 'var ') || (raw_intent.substr(0,3) == 'do ')) return true;
-if ((raw_intent.substr(0,1) == '{') || (raw_intent.substr(0,1) == '}')) return true;
-if ((raw_intent.charAt(raw_intent.length-1) == '{') || (raw_intent.charAt(raw_intent.length-1) == '}')) return true;
-if ((raw_intent.substr(0,3) == 'if ') || (raw_intent.substr(0,4) == 'else')) return true;
-if ((raw_intent.substr(0,4) == 'for ') || (raw_intent.substr(0,6) == 'while ')) return true;
-if ((raw_intent.substr(0,7) == 'switch ') || (raw_intent.substr(0,5) == 'case ')) return true;
-if ((raw_intent.substr(0,6) == 'break;') || (raw_intent == 'break')) return true;
-if ((raw_intent.substr(0,9) == 'continue;') || (raw_intent == 'continue')) return true;
-if ((raw_intent.substr(0,7) == 'casper.') || (raw_intent.substr(0,5) == 'this.')) return true;
-if (raw_intent.substr(0,7) == 'chrome.') return true; // chrome object for chrome integration
-if (raw_intent.substr(0,5) == ('test'+'.')) return true; // avoid replacement with test option
-if ((raw_intent.substr(0,2) == '//') || (raw_intent.charAt(raw_intent.length-1) == ';')) return true;
-if (raw_intent.substr(0,9) == 'function ') return true; // function definition
-// assume = is assignment statement, kinda acceptable as this is checked at the very end
-if (raw_intent.indexOf('=') > -1) return true; return false;}
+function is_code(raw_intent) {return tagui_is_code(raw_intent);}
 
 function file_url(absolute_filename) { // helper function to append file:// according for opening local files
 if (!absolute_filename || absolute_filename == '') return '';

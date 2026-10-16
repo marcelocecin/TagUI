@@ -517,7 +517,9 @@ if "%tagui_modern_mode%"=="true" (
 		exit /b 1
 	)
 	if "%tagui_web_browser%"=="phantomjs" set tagui_web_browser=headless
-	php -q tagui_modern.php "%flow_file%" %params% | tee -a "%flow_file%.log"
+	rem PHP appends the log and flushes each stdout line, so live mode is not stuck behind tee
+	set "TAGUI_LOG=%flow_file%.log"
+	php -q tagui_modern.php "%flow_file%" %params%
 	set tagui_error_code=!errorlevel!
 	cd /d "%initial_dir%"
 	exit /b !tagui_error_code!

@@ -62,6 +62,67 @@ $bad->execute_range(array('echo "unterminated'), 0, 0, true);
 expect('bad echo stops', $bad->stopped, true);
 expect('bad echo message', str_contains($bad->captured[0], 'ERROR -'), true);
 
+expect('intent click', tagui_keyword_intent('click Go'), 'tap');
+expect('intent choose', tagui_keyword_intent('choose color as Blue'), 'select');
+expect('intent download', tagui_keyword_intent('download https://example.com to out.html'), 'down');
+expect('intent file', tagui_keyword_intent('file:///tmp/page.html'), 'url');
+expect('intent read before r', tagui_keyword_intent('read page to html'), 'read');
+expect('code while', tagui_is_code('while n less than 3'), true);
+expect('not code echo', tagui_is_code('echo "hi"'), false);
+$generated = tagui_steps_javascript();
+expect('js has click alias', str_contains($generated, 'click '), true);
+expect('js has aria-label', str_contains($generated, 'aria-label'), true);
+expect('header uses shared intent', str_contains(file_get_contents(dirname(__DIR__) . '/tagui_header.js'), 'tagui_keyword_intent'), true);
+expect('header uses shared locator', str_contains(file_get_contents(dirname(__DIR__) . '/tagui_header.js'), 'tagui_locator_attributes'), true);
+
+$loop = new TaguiModern(null, true, '/tmp');
+$loop->capture = true;
+$loop->execute_range(array(
+'n = 0',
+'while n less than 3',
+'{',
+'n = n + 1',
+'echo "w" n',
+'if n equals to 2',
+'break',
+'echo "after"',
+'}'), 0, 8, true);
+expect('while break', $loop->captured, array('w1', 'after', 'w2'));
+expect('while var', $loop->vars['n'], 2);
+
+$csv = tempnam(sys_get_temp_dir(), 'tagui_csv_');
+unlink($csv);
+$csv .= '.csv';
+file_put_contents($csv, "#,city\n1,Lisbon\n2,Kyoto\n");
+$rows = tagui_datatable_rows('/tmp/no-such-flow', $csv);
+expect('datatable count', count($rows), 2);
+expect('datatable city', $rows[0]['city'], 'Lisbon');
+expect('datatable iteration', $rows[1]['[iteration]'], '2');
+$table = new TaguiModern(null, true, '/tmp');
+$table->capture = true;
+$table->repo = $rows[0];
+$table->execute_range(array('echo "city `city` row `[iteration]`"'), 0, 0, true);
+expect('datatable echo', $table->captured, array('city Lisbon row 1'));
+unlink($csv);
+
+$load_dir = sys_get_temp_dir() . '/tagui_load_' . getmypid();
+mkdir($load_dir);
+file_put_contents($load_dir . '/note.txt', "saved-note\n");
+$files = new TaguiModern(null, true, $load_dir);
+$files->capture = true;
+$files->execute_range(array(
+'load note.txt to note',
+'echo note',
+'write note to copy.txt',
+'load copy.txt to again',
+'echo again'), 0, 4, true);
+expect('load write', $files->captured, array('saved-note', 'saved-note'));
+expect('check step', true, true);
+$files->captured = array();
+$files->stopped = false;
+$files->execute_range(array('check note equals to "saved-note" | "yes" | "no"'), 0, 0, true);
+expect('check true', $files->captured, array('yes'));
+
 if ($failures > 0) {fwrite(STDERR, "$failures failed\n"); exit(1);}
 fwrite(STDOUT, "all logic checks passed\n");
 exit(0);

@@ -20,6 +20,7 @@ require_once __DIR__ . '/ws/Exception.php';
 require_once __DIR__ . '/ws/BadOpcodeException.php';
 require_once __DIR__ . '/ws/BadUriException.php';
 require_once __DIR__ . '/ws/ConnectionException.php';
+require_once __DIR__ . '/tagui_steps.php';
 
 /* -------------------------------------------------------------------------- */
 /* Chrome / Edge                                                              */
@@ -30,10 +31,16 @@ public $port = 0;
 public $profile = '';
 public $headless = true;
 public $timeout = 10.0;
+public $ws_url = '';
+public $frame_dx = 0;
+public $frame_dy = 0;
+public $network_urls = array();
 private $process = null;
 private $client = null;
 private $next_id = 0;
 private $log_path = '';
+private $frame_stack = array();
+private $popup_stack = array();
 
 function __construct() {}
 
@@ -80,9 +87,12 @@ $this->process = proc_open($args, $descriptor, $pipes);
 if (!is_resource($this->process)) {
 throw new RuntimeException('cannot start ' . $binary);}
 $ws = $this->wait_for_page_socket();
+$this->ws_url = $ws;
 $this->client = new WebSocket\Client($ws, array('timeout' => 30, 'fragment_size' => 65536));
 $this->command('Page.enable', new stdClass());
 $this->command('Runtime.enable', new stdClass());
+try {$this->command('Network.enable', new stdClass());} catch (Exception $e) {}
+try {$this->command('Page.setDownloadBehavior', array('behavior' => 'allow', 'downloadPath' => sys_get_temp_dir()));} catch (Exception $e) {}
 $this->command('Page.bringToFront', new stdClass());}
 
 function stop() {
@@ -152,43 +162,13 @@ return is_string($value) ? $value : '';}
 
 function locate($locator) {
 $payload = json_encode($locator, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-$script = <<<'JS'
-(function (locator) {
-function isXPath(value) {return value.charAt(0) === "/" || value.charAt(0) === "(";}
-function nodes(xpath) {
-try {return document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);}
-catch (e) {return null;}}
-function first(xpath) {var snap = nodes(xpath); if (!snap || snap.snapshotLength < 1) return null; return snap.snapshotItem(0);}
-function countOf(xpath) {var snap = nodes(xpath); return snap ? snap.snapshotLength : 0;}
-function cssCount(selector) {try {return document.querySelectorAll(selector).length;} catch (e) {return 0;}}
-function cssFirst(selector) {try {return document.querySelector(selector);} catch (e) {return null;}}
-function describe(el) {
-if (!el || !el.getBoundingClientRect) return null;
-try {el.scrollIntoView({block:"center", inline:"center"});} catch (e) {}
-var rect = el.getBoundingClientRect();
-var style = window.getComputedStyle(el);
-var visible = !!style && style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0" && rect.width > 0 && rect.height > 0;
-return {x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2),
-left: Math.round(rect.left), top: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height),
-text: (el.value || el.innerText || el.textContent || ""), visible: visible};}
-var quoted = locator.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-var paths = ['//*[@id="'+quoted+'"]','//*[contains(@id,"'+quoted+'")]','//*[@name="'+quoted+'"]',
-'//*[contains(@name,"'+quoted+'")]','//*[@class="'+quoted+'"]','//*[contains(@class,"'+quoted+'")]',
-'//*[@title="'+quoted+'"]','//*[contains(@title,"'+quoted+'")]','//*[@aria-label="'+quoted+'"]',
-'//*[contains(@aria-label,"'+quoted+'")]','//*[text()="'+quoted+'"]','//*[contains(text(),"'+quoted+'")]',
-'//*[@href="'+quoted+'"]','//*[contains(@href,"'+quoted+'")]'];
-var el = null; var total = 0;
-if (isXPath(locator)) {el = first(locator); total = countOf(locator);}
-else {
-total = cssCount(locator); el = cssFirst(locator);
-if (!el) {for (var i = 0; i < paths.length; i++) {el = first(paths[i]); if (el) {total = countOf(paths[i]); break;}}}
-else if (total < 1) total = 1;}
-if (!el) return {found:false, count:0};
-var info = describe(el); if (!info) return {found:false, count:0};
-info.found = true; info.count = total; return info;})
-JS;
-$info = $this->evaluate($script . '(' . $payload . ')');
+$script = "(function(){\n" . tagui_page_finder_js() . "\nreturn taguiDescribe(" . $payload . ");})()";
+$info = $this->evaluate($script);
 if (!is_array($info) || empty($info['found'])) return null;
+$info['x'] = (float)$info['x'] + $this->frame_dx;
+$info['y'] = (float)$info['y'] + $this->frame_dy;
+$info['left'] = (float)$info['left'] + $this->frame_dx;
+$info['top'] = (float)$info['top'] + $this->frame_dy;
 return $info;}
 
 function find($locator, $live) {
@@ -218,24 +198,11 @@ $clear = false;
 if (str_starts_with(strtolower($text), '[clear]')) {$clear = true; $text = substr($text, 7);}
 $payload = json_encode($locator, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 $clear_js = $clear ? 'true' : 'false';
-$script = <<<'JS'
-(function (locator, clear) {
-function isXPath(value) {return value.charAt(0) === "/" || value.charAt(0) === "(";}
-function first(xpath) {try {var snap = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null); return snap.singleNodeValue;} catch (e) {return null;}}
-var el = null;
-if (isXPath(locator)) el = first(locator);
-else {try {el = document.querySelector(locator);} catch (e) {el = null;}}
-if (!el) {
-var quoted = locator.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-var paths = ['//*[@id="'+quoted+'"]','//*[contains(@id,"'+quoted+'")]','//*[@name="'+quoted+'"]','//*[contains(@name,"'+quoted+'")]','//*[@aria-label="'+quoted+'"]','//*[contains(text(),"'+quoted+'")]'];
-for (var i = 0; i < paths.length; i++) {el = first(paths[i]); if (el) break;}}
-if (!el) return false;
-try {el.scrollIntoView({block:"center", inline:"center"});} catch (e) {}
-el.focus();
-if (clear && ("value" in el)) {el.value = ""; el.dispatchEvent(new Event("input", {bubbles:true})); el.dispatchEvent(new Event("change", {bubbles:true}));}
-return true;})
-JS;
-$focused = $this->evaluate($script . '(' . $payload . ',' . $clear_js . ')');
+$script = "(function(){\n" . tagui_page_finder_js() . "\nvar found = taguiElement(" . $payload . "); var el = found.el; if (!el) return false;"
+. "try {el.scrollIntoView({block:'center', inline:'center'});} catch (e) {} el.focus();"
+. "if (" . $clear_js . " && ('value' in el)) {el.value = ''; el.dispatchEvent(new Event('input', {bubbles:true})); el.dispatchEvent(new Event('change', {bubbles:true}));}"
+. "return true;})()";
+$focused = $this->evaluate($script);
 if ($focused !== true) return false;
 $parts = preg_split('/(\[(?:enter|tab|space|esc|ENTER|TAB|SPACE|ESC)\])/', $text, -1, PREG_SPLIT_DELIM_CAPTURE);
 foreach ($parts as $part) {
@@ -265,7 +232,7 @@ $this->command('Input.dispatchKeyEvent', array(
 $this->command('Input.dispatchKeyEvent', array(
 'type' => 'keyUp', 'key' => $key, 'code' => $key, 'windowsVirtualKeyCode' => $code, 'nativeVirtualKeyCode' => $code));}
 
-private function command($method, $params) {
+function command($method, $params) {
 if ($params instanceof stdClass) $encoded_params = new stdClass();
 else $encoded_params = $params;
 $this->next_id++;
@@ -277,6 +244,14 @@ while (microtime(true) < $deadline) {
 try {$raw = $this->client->receive();}
 catch (Exception $e) {continue;}
 $message = json_decode($raw, true);
+if (is_array($message) && isset($message['method']) && $message['method'] === 'Network.responseReceived') {
+$net_url = '';
+if (isset($message['params']['response']['url'])) $net_url = (string)$message['params']['response']['url'];
+if ($net_url !== '') {
+$net_type = '';
+if (isset($message['params']['type'])) $net_type = (string)$message['params']['type'];
+$this->network_urls[] = array('url' => $net_url, 'type' => $net_type);
+if (count($this->network_urls) > 200) array_shift($this->network_urls);}}
 if (!is_array($message) || !isset($message['id']) || (int)$message['id'] !== $id) continue;
 if (isset($message['error'])) {
 throw new RuntimeException($method . ' failed: ' . json_encode($message['error']));}
@@ -316,9 +291,13 @@ if (is_string($from_env) && $from_env !== '' && is_file($from_env)) return $from
 $candidates = array(
 'google-chrome-stable', '/opt/google/chrome/chrome', 'chromium', 'chromium-browser',
 'microsoft-edge-stable', 'microsoft-edge', 'google-chrome',
+// App-bundle paths are the same on Apple Silicon and Intel macOS.
 '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+'/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
 '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-'/Applications/Chromium.app/Contents/MacOS/Chromium');
+'/Applications/Microsoft Edge Canary.app/Contents/MacOS/Microsoft Edge Canary',
+'/Applications/Chromium.app/Contents/MacOS/Chromium',
+'/Applications/Brave Browser.app/Contents/MacOS/Brave Browser');
 if (getenv('PROGRAMFILES')) {
 $pf = getenv('PROGRAMFILES'); $pf86 = getenv('PROGRAMFILES(X86)'); $local = getenv('LOCALAPPDATA');
 $candidates[] = $pf . '\\Google\\Chrome\\Application\\chrome.exe';
@@ -337,6 +316,105 @@ continue;}
 $found = $this->which($candidate);
 if ($found !== '') return $found;}
 return '';}
+
+function push_frame($name) {
+$payload = json_encode($name, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+$script = "(function(){window.__tagui_roots = window.__tagui_roots || [document];"
+. "var root = window.__tagui_roots[window.__tagui_roots.length - 1];"
+. "var frames = root.querySelectorAll('iframe,frame'); var frame = null; var wanted = " . $payload . ";"
+. "for (var i = 0; i < frames.length; i++) {if (frames[i].getAttribute('name') === wanted || frames[i].id === wanted) {frame = frames[i]; break;}}"
+. "if (!frame || !frame.contentDocument) return null; var rect = frame.getBoundingClientRect();"
+. "window.__tagui_roots.push(frame.contentDocument); return {x: rect.left, y: rect.top};})()";
+$rect = $this->evaluate($script);
+if (!is_array($rect)) return false;
+$this->frame_stack[] = $rect;
+$this->frame_dx += (float)$rect['x'];
+$this->frame_dy += (float)$rect['y'];
+return true;}
+
+function pop_frame() {
+$rect = array_pop($this->frame_stack);
+if (!is_array($rect)) return;
+$this->frame_dx -= (float)$rect['x'];
+$this->frame_dy -= (float)$rect['y'];
+$this->evaluate('if (window.__tagui_roots && window.__tagui_roots.length > 1) window.__tagui_roots.pop(); true');}
+
+function push_popup($keyword, $timeout) {
+$deadline = microtime(true) + max((float)$timeout, 1);
+$match = null;
+do {
+$match = $this->find_popup($keyword);
+if ($match !== null) break;
+usleep(200000);
+} while (microtime(true) < $deadline);
+if ($match === null) return false;
+$this->popup_stack[] = array(
+'client' => $this->client, 'ws' => $this->ws_url, 'dx' => $this->frame_dx, 'dy' => $this->frame_dy, 'frames' => $this->frame_stack);
+$this->frame_dx = 0; $this->frame_dy = 0; $this->frame_stack = array();
+$this->ws_url = $match['webSocketDebuggerUrl'];
+$this->client = new WebSocket\Client($this->ws_url, array('timeout' => 30, 'fragment_size' => 65536));
+$this->command('Page.enable', new stdClass());
+$this->command('Runtime.enable', new stdClass());
+try {$this->command('Page.bringToFront', new stdClass());} catch (Exception $e) {}
+return true;}
+
+function pop_popup() {
+$saved = array_pop($this->popup_stack);
+if (!is_array($saved)) return;
+try {if ($this->client !== null) $this->client->close();} catch (Exception $e) {}
+$this->client = $saved['client'];
+$this->ws_url = $saved['ws'];
+$this->frame_dx = $saved['dx'];
+$this->frame_dy = $saved['dy'];
+$this->frame_stack = $saved['frames'];}
+
+function set_file($locator, $filename) {
+$payload = json_encode($locator, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+$script = "(function(){\n" . tagui_page_finder_js() . "\nreturn taguiElement(" . $payload . ").el || null;})()";
+$result = $this->command('Runtime.evaluate', array('expression' => $script, 'returnByValue' => false));
+if (empty($result['result']['objectId'])) return false;
+try {$this->command('DOM.enable', new stdClass());} catch (Exception $e) {}
+try {$this->command('DOM.getDocument', array('depth' => 0));} catch (Exception $e) {}
+$node = $this->command('DOM.requestNode', array('objectId' => $result['result']['objectId']));
+if (empty($node['nodeId'])) return false;
+$this->command('DOM.setFileInputFiles', array('files' => array($filename), 'nodeId' => $node['nodeId']));
+return true;}
+
+function await_network_url($keyword, $timeout) {
+$deadline = microtime(true) + max((float)$timeout, 1);
+do {
+$found = $this->match_network($keyword);
+if ($found !== '') return $found;
+try {$this->command('Runtime.evaluate', array('expression' => '1', 'returnByValue' => true));} catch (Exception $e) {}
+usleep(100000);
+} while (microtime(true) < $deadline);
+return $this->match_network($keyword);}
+
+private function match_network($keyword) {
+$fallback = '';
+for ($i = count($this->network_urls) - 1; $i >= 0; $i--) {
+$entry = $this->network_urls[$i];
+$url = is_array($entry) ? $entry['url'] : (string)$entry;
+$type = is_array($entry) && isset($entry['type']) ? $entry['type'] : '';
+if (stripos($url, $keyword) === false) continue;
+if (strcasecmp($type, 'Document') === 0) return $url;
+if ($fallback === '') $fallback = $url;}
+return $fallback;}
+
+private function find_popup($keyword) {
+$list = $this->list_pages();
+foreach ($list as $target) {
+if (!isset($target['type']) || $target['type'] !== 'page' || empty($target['webSocketDebuggerUrl'])) continue;
+if ($target['webSocketDebuggerUrl'] === $this->ws_url) continue;
+$url = isset($target['url']) ? (string)$target['url'] : '';
+if ($url !== '' && stripos($url, $keyword) !== false) return $target;}
+return null;}
+
+private function list_pages() {
+$context = stream_context_create(array('http' => array('timeout' => 2)));
+$raw = @file_get_contents('http://127.0.0.1:' . $this->port . '/json/list', false, $context);
+$list = json_decode((string)$raw, true);
+return is_array($list) ? $list : array();}
 
 private function which($name) {
 $paths = explode(PATH_SEPARATOR, (string)getenv('PATH'));
@@ -517,6 +595,7 @@ private function num($value) {if (is_bool($value)) return $value ? 1 : 0; return
 /* -------------------------------------------------------------------------- */
 
 class TaguiModern {
+use TaguiModernSteps;
 public $chrome;
 public $quiet = false;
 public $capture = false;
@@ -525,6 +604,10 @@ public $vars = array();
 public $flow_path = '';
 public $live = false;
 public $stopped = false;
+public $jump = null;
+public $repo = array();
+public $inside_run = false;
+public $run_buffer = '';
 public $timeout = 10.0;
 public $snap_count = 0;
 public $started_at = 0;
@@ -557,6 +640,7 @@ $this->emit_raw('FINISH - automation finished - ' . $seconds . 's');}}
 function execute_range($lines, $start, $end, $active) {
 $i = $start;
 while ($i <= $end) {
+if ($this->jump !== null) return;
 if ($this->stopped && $active) return;
 $trimmed = trim($lines[$i]);
 if ($trimmed === '' || str_starts_with($trimmed, '//')) {$i++; continue;}
@@ -571,8 +655,13 @@ if ($close < 0) {if ($active) $this->fail($i, 'number of step { does not tally w
 if ($active) $this->execute_range($lines, $i + 1, $close - 1, true);
 return $close + 1;}
 if ($line === '}') {if ($active) $this->fail($i, 'unexpected }'); return $i + 1;}
+if ($lower === 'break' || $lower === 'break;') {if ($active) $this->jump = 'break'; return $i + 1;}
+if ($lower === 'continue' || $lower === 'continue;') {if ($active) $this->jump = 'continue'; return $i + 1;}
 if (str_starts_with($lower, 'if ')) return $this->execute_if($lines, $i, $end, $active);
 if (str_starts_with($lower, 'for ') || str_starts_with($lower, 'for(')) return $this->execute_for($lines, $i, $end, $active);
+if (str_starts_with($lower, 'while ') || str_starts_with($lower, 'while(')) return $this->execute_while($lines, $i, $end, $active);
+if (str_starts_with($lower, 'frame ') || $lower === 'frame') return $this->execute_frame($lines, $i, $end, $active);
+if (str_starts_with($lower, 'popup ') || $lower === 'popup') return $this->execute_popup($lines, $i, $end, $active);
 if ($active) $this->execute_step($line, $i);
 return $i + 1;}
 
@@ -619,43 +708,63 @@ if ($from > $to) return $this->execute_statement($lines, $body, $end, false);
 for ($value = $from; $value <= $to; $value++) {
 if ($this->stopped) break;
 $this->vars[$spec['var']] = $value;
-$after = $this->execute_statement($lines, $body, $end, true);}
+$after = $this->execute_statement($lines, $body, $end, true);
+if ($this->jump === 'break') {$this->jump = null; break;}
+if ($this->jump === 'continue') {$this->jump = null; continue;}}
 return $after;}
 
 function execute_step($line, $index) {
-$lower = strtolower($line);
-if ($lower === 'live' || str_starts_with($lower, 'live ')) {
+$intent = tagui_keyword_intent($line);
+if ($intent === 'live') {
 if ($this->live) {$this->fail($index, 'you are already in live mode, type done to quit live mode'); return;}
 $this->live_loop(); return;}
-if (str_starts_with($lower, 'http://') || str_starts_with($lower, 'https://') || str_starts_with($lower, 'file://')) {
-$this->trace($line); $this->go($line, $index); return;}
-if (str_starts_with($lower, 'click ') || str_starts_with($lower, 'tap ') || $lower === 'click' || $lower === 'tap') {
-$this->trace($line); $this->pointer($line, 'left', 1, $index); return;}
-if (str_starts_with($lower, 'rclick ') || str_starts_with($lower, 'rtap ')) {
-$this->trace($line); $this->pointer($line, 'right', 1, $index); return;}
-if (str_starts_with($lower, 'dclick ') || str_starts_with($lower, 'dtap ')) {
-$this->trace($line); $this->pointer($line, 'left', 2, $index); return;}
-if (str_starts_with($lower, 'hover ') || str_starts_with($lower, 'move ')) {
+if ($intent === 'url') {$this->trace($line); $this->go($line, $index); return;}
+if ($intent === 'tap' || $intent === 'rtap' || $intent === 'dtap') {
+$target = trim(substr($line, strpos($line, ' ') + 1));
+if (tagui_is_visual($target)) {$this->visual_gap($index, $line); return;}
+$this->trace($line);
+$button = $intent === 'rtap' ? 'right' : 'left';
+$clicks = $intent === 'dtap' ? 2 : 1;
+$this->pointer($line, $button, $clicks, $index); return;}
+if ($intent === 'hover') {
+$target = trim(substr($line, strpos($line, ' ') + 1));
+if (tagui_is_visual($target)) {$this->visual_gap($index, $line); return;}
 $this->trace($line); $this->hover($line, $index); return;}
-if (str_starts_with($lower, 'type ') || str_starts_with($lower, 'enter ')) {
+if ($intent === 'type') {
+$params = trim(substr($line, strpos($line, ' ') + 1));
+$target = trim(substr($params, 0, (int)stripos($params . ' as ', ' as ')));
+if (tagui_is_visual($target)) {$this->visual_gap($index, $line); return;}
 $this->trace($line); $this->type_step($line, $index); return;}
-if (str_starts_with($lower, 'read ') || str_starts_with($lower, 'fetch ')) {
-$this->trace($line); $this->read_step($line, $index); return;}
-if (str_starts_with($lower, 'show ') || str_starts_with($lower, 'print ')) {
-$this->show_step($line, $index); return;}
-if (str_starts_with($lower, 'echo ') || $lower === 'echo') {$this->echo_step($line, $index); return;}
-if (str_starts_with($lower, 'snap ') || $lower === 'snap') {$this->trace($line); $this->snap_step($line, $index); return;}
-if (str_starts_with($lower, 'wait ') || $lower === 'wait') {$this->trace($line); $this->wait_step($line, $index); return;}
-if (str_starts_with($lower, 'dump ') || $lower === 'dump') {$this->dump_step($line, $index); return;}
-if (str_starts_with($lower, 'timeout ')) {$this->timeout_step($line, $index); return;}
-if (str_starts_with($lower, 'dom ')) {$this->dom_step($line, $index); return;}
+if ($intent === 'select') {$this->trace($line); $this->select_step($line, $index); return;}
+if ($intent === 'read') {$this->trace($line); $this->read_step($line, $index); return;}
+if ($intent === 'show') {$this->show_step($line, $index); return;}
+if ($intent === 'echo') {$this->echo_step($line, $index); return;}
+if ($intent === 'snap') {$this->trace($line); $this->snap_step($line, $index); return;}
+if ($intent === 'wait') {$this->trace($line); $this->wait_step($line, $index); return;}
+if ($intent === 'dump') {$this->dump_step($line, $index); return;}
+if ($intent === 'timeout') {$this->timeout_step($line, $index); return;}
+if ($intent === 'dom') {$this->dom_step($line, $index); return;}
+if ($intent === 'upload') {$this->trace($line); $this->upload_step($line, $index); return;}
+if ($intent === 'down') {$this->trace($line); $this->download_step($line, $index); return;}
+if ($intent === 'receive') {$this->trace($line); $this->receive_step($line, $index); return;}
+if ($intent === 'save') {$this->trace($line); $this->save_step($line, $index); return;}
+if ($intent === 'write') {$this->trace($line); $this->write_step($line, $index); return;}
+if ($intent === 'load') {$this->load_step($line, $index); return;}
+if ($intent === 'table') {$this->trace($line); $this->table_step($line, $index); return;}
+if ($intent === 'ask') {$this->ask_step($line, $index); return;}
+if ($intent === 'api') {$this->trace($line); $this->api_step($line, $index); return;}
+if ($intent === 'run') {$this->run_step($line, $index); return;}
+if ($intent === 'check') {$this->check_step($line, $index); return;}
+if ($intent === 'keyboard' || $intent === 'mouse' || $intent === 'vision') {$this->visual_gap($index, $line); return;}
+if ($intent === 'js' || $intent === 'py' || $intent === 'r' || $intent === 'test') {$this->integration_gap($intent, $index); return;}
+if ($intent === 'frame' || $intent === 'popup') {
+$this->fail($index, $intent . ' is not supported in live mode. It opens a block around the following steps; put it in a flow file.'); return;}
 if ($this->is_assignment($line)) {$this->assign_step($line, $index); return;}
 $this->fail($index, 'cannot understand step ' . $line);}
 
 function live_loop() {
 $this->live = true;
-fwrite(STDOUT, "LIVE MODE - type done to quit\n \x08");
-fflush(STDOUT);
+tagui_write_output("LIVE MODE - type done to quit\n \x08");
 while (true) {
 $raw = fgets(STDIN);
 if ($raw === false) break;
@@ -703,6 +812,7 @@ $split = stripos($params, ' to ');
 if ($split === false) {$this->fail($index, 'target/variable missing for ' . $line); return;}
 $target = trim(substr($params, 0, $split));
 $name = trim(substr($params, $split + 4));
+if (tagui_is_visual($target)) {$this->visual_gap($index, $line); return;}
 if ($target === '' || $name === '' || !preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $name)) {
 $this->fail($index, 'target/variable missing for ' . $line); return;}
 if (strcasecmp($target, 'page') === 0) {
@@ -716,7 +826,7 @@ $target = trim(substr($line, strpos($line, ' ') + 1));
 if ($target === '') {$this->fail($index, 'target missing for ' . $line); return;}
 if (strcasecmp($target, 'page') === 0) {
 if (!$this->require_chrome($index)) return;
-$this->emit($this->chrome->body_text()); return;}
+$this->emit($line . " - \n" . $this->chrome->page_html()); return;}
 $info = $this->need($target, $index); if ($info === null) return;
 $this->emit(trim((string)$info['text']));}
 
@@ -782,6 +892,7 @@ function dom_step($line, $index) {
 $params = trim(substr($line, 4));
 if ($params === '') {$this->fail($index, 'statement missing for ' . $line); return;}
 if (!$this->require_chrome($index)) return;
+if (str_starts_with($params, 'return ')) $params = trim(substr($params, 7));
 try {$this->vars['dom_result'] = $this->chrome->evaluate($params);}
 catch (Exception $e) {$this->fail($index, $e->getMessage());}}
 
@@ -892,6 +1003,7 @@ if (!$within && $ch === ' ') $out .= '+'; else $out .= $ch;}
 return preg_replace('/\+{2,}/', '+', $out);}
 
 function expand_backticks($line) {
+$line = tagui_apply_repository($line, $this->repo);
 $engine = $this;
 $expanded = preg_replace_callback('/`([A-Za-z_][A-Za-z0-9_]*)`/', function ($match) use ($engine) {
 $name = $match[1];
@@ -913,17 +1025,17 @@ function fail($index, $message) {
 $prefix = 'ERROR - ';
 if ($index >= 0 && !$this->live) $prefix .= '[LINE ' . ($index + 1) . '] ';
 $this->emit($prefix . $message);
+if (!$this->live && $this->chrome !== null && str_contains($message, 'cannot find ')) {
+try {$this->chrome->screenshot($this->next_snap(), null);} catch (Exception $e) {}}
 if (!$this->live) $this->stopped = true;}
 
 function trace($line) {if (!$this->quiet && !$this->live) $this->emit($line);}
 
-function emit($text) {
-if ($this->capture) {$this->captured[] = (string)$text; return;}
-echo $text, "\n"; fflush(STDOUT);}
+function emit($text) {$this->emit_raw($text);}
 
 function emit_raw($text) {
 if ($this->capture) {$this->captured[] = (string)$text; return;}
-echo $text, "\n"; fflush(STDOUT);}
+tagui_write_output($text . "\n");}
 
 function stringish($value) {
 if ($value === true) return 'true'; if ($value === false) return 'false'; if ($value === null) return '';
@@ -957,19 +1069,37 @@ return -1;}}
 /* Entry point                                                                */
 /* -------------------------------------------------------------------------- */
 
+function tagui_write_output($text) {
+echo $text;
+fflush(STDOUT);
+$log = getenv('TAGUI_LOG');
+if (!is_string($log) || $log === '') return;
+$handle = fopen($log, 'ab');
+if ($handle === false) return;
+fwrite($handle, $text);
+fclose($handle);}
+
 function tagui_modern_main($argv) {
 ini_set('display_errors', 'stderr');
 while (ob_get_level() > 0) {ob_end_flush();}
 ob_implicit_flush(true);
-if (!isset($argv[1]) || $argv[1] === '') {fwrite(STDERR, "ERROR - specify flow filename as first parameter\n"); return 1;}
+if (!isset($argv[1]) || $argv[1] === '') {tagui_write_output("ERROR - specify flow filename as first parameter\n"); return 1;}
 $flow = $argv[1];
-if (!is_file($flow)) {fwrite(STDERR, "ERROR - cannot find $flow\n"); return 1;}
+if (!is_file($flow)) {tagui_write_output("ERROR - cannot find $flow\n"); return 1;}
 $browser = getenv('tagui_web_browser');
 if ($browser !== 'chrome' && $browser !== 'headless') $browser = 'headless';
 $quiet = getenv('tagui_quiet_mode') === 'true';
 $chrome = new TaguiChrome();
 $engine = new TaguiModern($chrome, $quiet, dirname($flow));
-if (isset($argv[2])) $engine->set_cli_params(array_slice($argv, 2));
+$cli = isset($argv[2]) ? array_slice($argv, 2) : array();
+$csv_arg = '';
+$params = array();
+foreach ($cli as $arg) {
+if (is_string($arg) && strlen($arg) > 4 && substr(strtolower($arg), -4) === '.csv') $csv_arg = $arg;
+else if ($arg !== '') $params[] = $arg;}
+$engine->set_cli_params($params);
+try {$datasets = tagui_datatable_rows($flow, $csv_arg);}
+catch (Exception $e) {tagui_write_output('ERROR - ' . $e->getMessage() . "\n"); return 1;}
 $chrome_started = false;
 pcntl_async_signals(true);
 $stop = function () use ($chrome, &$chrome_started) {
@@ -983,9 +1113,15 @@ $chrome->timeout = $engine->timeout;
 $chrome_started = true;
 $lines = file($flow, FILE_IGNORE_NEW_LINES);
 if ($lines === false) $lines = array();
-$engine->run_lines($lines);}
+$speed = getenv('tagui_speed_mode') === 'true';
+foreach ($datasets as $index => $repo) {
+if ($index > 0 && !$speed) sleep(3);
+$engine->repo = $repo;
+$engine->stopped = false;
+$engine->jump = null;
+$engine->run_lines($lines);}}
 catch (Exception $e) {
-echo 'ERROR - ', $e->getMessage(), "\n";
+tagui_write_output('ERROR - ' . $e->getMessage() . "\n");
 $stop();
 return 1;}
 $stop();
