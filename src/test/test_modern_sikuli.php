@@ -51,7 +51,28 @@ $miss = TaguiSikuli::run('click ' . $missing, 20);
 $note = TaguiSikuli::last_result();
 @unlink($missing);
 if (!$miss && str_contains($note, 'not on screen')) fwrite(STDOUT, "ok   image miss ($note)\n");
-else {fwrite(STDERR, "FAIL image miss\n$note\n"); $failures++;}}
+else {fwrite(STDERR, "FAIL image miss\n$note\n"); $failures++;}
+TaguiSikuli::run('vision wait_timeout = 8; setAutoWaitTimeout(8)', 30);
+$hang = sys_get_temp_dir() . '/tagui_hang_' . getmypid() . '.png';
+$needle = sys_get_temp_dir() . '/tagui_kill_needle_' . getmypid();
+write_unique_png($hang);
+file_put_contents($needle, 'oculixide');
+$kill_script = 'sleep 1; needle=$(cat ' . $needle . '); for p in /proc/[0-9]*; do cmd=$(tr "\000" " " < "$p/cmdline" 2>/dev/null || true); case "$cmd" in *"$needle"*) kill -9 "${p#/proc/}";; esac; done';
+$killer = proc_open(array('bash', '-c', $kill_script), array(
+0 => array('file', '/dev/null', 'r'),
+1 => array('file', '/dev/null', 'w'),
+2 => array('file', '/dev/null', 'w')), $kill_pipes);
+$began = microtime(true);
+$died = false;
+$death = '';
+try {TaguiSikuli::run('click ' . $hang, 30);}
+catch (Exception $death_error) {$died = true; $death = $death_error->getMessage();}
+$elapsed = microtime(true) - $began;
+@unlink($hang);
+@unlink($needle);
+if (is_resource($killer)) proc_close($killer);
+if ($died && $elapsed < 8 && str_contains($death, 'exited during') && !str_contains($death, 'timed out')) fwrite(STDOUT, 'ok   java death (' . number_format($elapsed, 1) . "s)\n");
+else {fwrite(STDERR, "FAIL java death elapsed=$elapsed\n$death\n"); $failures++;}}
 catch (Exception $e) {
 fwrite(STDERR, 'FAIL ' . $e->getMessage() . "\n");
 $log = (string)@file_get_contents(sys_get_temp_dir() . '/tagui_oculix.log');

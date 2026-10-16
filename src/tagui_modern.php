@@ -659,7 +659,7 @@ $index++;}}
 
 function run_lines($lines) {
 $this->started_at = microtime(true);
-if (!$this->quiet) $this->emit_raw("\nSTART - automation started - " . date('D M j Y H:i:s'));
+if (!$this->quiet) $this->emit_raw("\nSTART - automation started - " . tagui_local_stamp());
 $this->execute_range($lines, 0, count($lines) - 1, true);
 if (!$this->quiet) {
 $url = 'about:blank'; $title = '';
@@ -1273,18 +1273,20 @@ $lines = file($flow, FILE_IGNORE_NEW_LINES);
 if ($lines === false) $lines = array();
 $lines = tagui_translate_lines($lines, tagui_active_language(__DIR__));
 $speed = getenv('tagui_speed_mode') === 'true';
+$failed = false;
 foreach ($datasets as $index => $repo) {
 if ($index > 0 && !$speed) sleep(3);
 $engine->repo = $repo;
 $engine->stopped = false;
 $engine->jump = null;
-$engine->run_lines($lines);}}
+$engine->run_lines($lines);
+if ($engine->stopped) $failed = true;}}
 catch (Exception $e) {
 tagui_write_output('ERROR - ' . $e->getMessage() . "\n");
 $stop();
 return 1;}
 $stop();
-return 0;}
+return $failed ? 1 : 0;}
 
 if (PHP_SAPI === 'cli' && isset($argv[0]) && realpath($argv[0]) === realpath(__FILE__)) {
 exit(tagui_modern_main($argv));}

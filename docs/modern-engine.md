@@ -164,13 +164,13 @@ Visual steps talk to `src/tagui.sikuli/tagui.py` through `tagui_sikuli.in` and `
 | Java | OpenJDK 8 | Java 8 era | Java 11 or newer. This VM used OpenJDK 21.0.12 |
 | Apple Silicon, Windows, Linux | Java 8 builds. Apple Silicon needs an x64 JDK under Rosetta | No new platform builds | Native Apple Silicon jars from the 3.x line. Linux, macOS, and Windows fat jars are on the release. The Linux IDE jar probed here is 197708979 bytes |
 | API versus `tagui.py` | The bridge was written for this API | Same historical API | Jython 2.7.4 loaded `tagui.py` unchanged (`setAutoWaitTimeout`, `Settings`, `Screen`, `type`) |
-| OCR and the JVM crash | Bundled Tesseract from the 1.1.x era. aisingapore/TagUI#1299 is the report of a JVM crash in that pairing. The issue page was not available to re-read; the failure mode is the known SikuliX 1.1.x native crash | No new OCR stack | Legerix Tesseract 5.5.0, loaded from the jar. On this VM `Screen().text()` returned SUCCESS and the process stayed up. The Xvfb screen was blank, so the recognized text was empty. OculiX issues 211 and 401 describe Linux loading the system `libtesseract` first and then missing `TessBaseAPIGetPAGEText`. This VM has no system libtesseract, so that conflict was not exercised |
-| How a flow starts it | `java -jar sikulix.jar -r src/tagui.sikuli`, working directory `src/` | Use OculiX instead | `java -jar oculixide-<os>.jar -r src/tagui.sikuli`, working directory `src/`. `TAGUI_SIKULI_JAR` points at that jar. A display is required. On Linux, `Xvfb :99 -screen 0 1366x768x24` is enough for the file bridge |
+| OCR and the JVM crash | Bundled Tesseract from the 1.1.x era. aisingapore/TagUI#1299 is the report of a JVM crash in that pairing. The issue page was not available to re-read; the failure mode is the known SikuliX 1.1.x native crash | No new OCR stack | Legerix Tesseract 5.5.0 is in the jar. On Ubuntu 24.04, a blank Xvfb `Screen().text()` returned SUCCESS with empty text, which does not show that a glyph was read. On Debian 13 the same call fails: bundled `libleptonica.so.6` needs `libjpeg.so.8`. See Linux and OculiX |
+| How a flow starts it | `java -jar sikulix.jar -r src/tagui.sikuli`, working directory `src/` | Use OculiX instead | `java -jar oculixide-<os>.jar -r src/tagui.sikuli`, working directory `src/`. `TAGUI_SIKULI_JAR` points at that jar. Linux needs the full JRE (not `openjdk-*-jre-headless`) and an X11 `DISPLAY`. `Xvfb :99 -screen 0 1366x768x24` is enough for the file bridge. Wayland is untested |
 
 The modern engine sends `keyboard`, `mouse`, `vision`, and image or coordinate targets through that bridge (`TaguiSikuli` in `src/tagui_runtime.php`). The jar is not vendored. Headless on this VM, Xvfb plus OculiX 4.0.0:
 
 - `[0] START`, then `vision print(...)` returned SUCCESS and the log contained the print
-- `Screen().text()` returned SUCCESS without a JVM crash
+- `Screen().text()` on this Ubuntu VM returned SUCCESS on a blank Xvfb screen. That is not OCR of visible text, and it does not hold on Debian 13
 - `keyboard a` returned SUCCESS and the log showed `TYPE "a"`
 - A `click` of a real PNG was not run on this blank Xvfb display. The Apple Silicon run below clicked an image once the PNG was the physical-pixel size
 
@@ -180,7 +180,7 @@ export DISPLAY=:99
 tagui flow.tag modern
 ```
 
-The jar for the probe was `oculixide-4.0.0-linux.jar` from the [v4.0.0 release](https://github.com/oculix-org/Oculix/releases/tag/v4.0.0). `-r` wants the IDE jar. `oculixapi` is the library jar. If OculiX exits before `[0] START`, the TagUI error includes the cause from `tagui_oculix.log` in the temp directory. `Mouse not useable (blocked)` becomes a macOS permissions hint. On Linux with a distro Tesseract installed, that log is where a `TessBaseAPIGetPAGEText` failure shows up. Keep the system `libtesseract` off the loader path so Legerix's copy is the one that loads.
+The jar for the probe was `oculixide-4.0.0-linux.jar` from the [v4.0.0 release](https://github.com/oculix-org/Oculix/releases/tag/v4.0.0). `-r` wants the IDE jar. `oculixapi` is the library jar. If OculiX exits before `[0] START`, or the Java process dies during a step, the TagUI error quotes the first `Exception` / `Caused by` line and any `[error]` lines from `tagui_oculix.log` in the temp directory. A trailing `... 5 more` stack line is not the message. `Mouse not useable (blocked)` becomes a macOS permissions hint. `java.awt.HeadlessException` (`running in headless environment`, including a machine whose only Java is `openjdk-*-jre-headless`) becomes a hint to install the full JRE and set `DISPLAY`. The log is truncated when that Java process starts, so the lines belong to the current run.
 
 A missed image is `visual step failed` plus `Image not on screen` and, when OculiX can score a candidate, `best similarity 0.41`. The bridge searches once at the normal similarity, then once more at a very low similarity only to read that score. It does not click the low-scoring match. `Settings.AlwaysResize` stays unset: a global resize would also scale images that were already captured at screen resolution.
 
@@ -193,6 +193,32 @@ Confirmed on an Apple Silicon Mac with a built-in Retina display (3024×1964), m
 3. Grant **Accessibility** and **Screen Recording** to the app that launches TagUI (Terminal, iTerm, or the IDE). Without them OculiX exits with `FATAL: Mouse.init: Mouse not useable (blocked)`. TagUI reports that line and the permission hint instead of only `OculiX exited before it was ready`.
 4. Retina. Sikuli compares PNG pixels with the physical screen. A button that is 260×90 CSS pixels is 520×180 physical pixels at devicePixelRatio 2. `snap` uses `Page.captureScreenshot` with `fromSurface: true` and clip scale 1, which is the device-pixel image. Visible `chrome` does not pass `--force-device-scale-factor=1`, so Chrome keeps the display scale and a new snap matches the screen. Headless still forces scale factor 1 (override with `TAGUI_DEVICE_SCALE`). An image snapped earlier, at CSS size, will miss until it is snapped again. On this Linux VM, `TAGUI_DEVICE_SCALE=2` saved a 100×40 CSS box as a 200×80 PNG.
 5. `file://` URLs are opened at `realpath`. On macOS `/tmp` is a symlink to `/private/tmp`, and `file:///tmp/...` otherwise lands on `chrome-error://chromewebdata/`. The same step with the real path, or with `http://`, opens the page.
+
+### Linux and OculiX
+
+Confirmed on Debian 13 (trixie), an X11 session at 1920×1200, PHP 8.4.26, Chrome 154, OpenJDK 21, and `oculixide-4.0.0-linux.jar`:
+
+1. Install the full JRE, Java 11 or newer. The package name `openjdk-*-jre-headless` is not enough: AWT throws `java.awt.HeadlessException: running in headless environment` even when a display exists. TagUI quotes that exception and says to install the full JRE and set `DISPLAY`.
+2. An X11 session. Export `DISPLAY` (a real X server, or `Xvfb :99 -screen 0 1366x768x24`). Wayland is untested.
+3. Image click works at 1× scale. `btn.png` was 260×90 and the page title became `clicado-pelo-oculix`.
+4. OCR does not work on Debian. OculiX's bundled Legerix `libleptonica.so.6` is linked to `libjpeg.so.8`. That soname is Ubuntu's `libjpeg-turbo8`. Debian ships `libjpeg.so.62` (`libjpeg62-turbo`) and does not ship `.8`. OculiX then falls back to a `tesseract` binary. Installing `tesseract-ocr` and `libtesseract5` 5.5.0 still fails with `UnsatisfiedLinkError` for `leptonica`. The Ubuntu 24.04 probe on this VM has `libjpeg.so.8`, so `Screen().text()` stayed up and returned empty text from a blank screen. That result does not transfer to Debian, and it never read a glyph.
+5. If Java dies in the middle of a step, TagUI checks the process on each poll and reports the `[error]` lines from `tagui_oculix.log` immediately. It does not wait out the 30 second visual timeout.
+
+A possible workaround is to put `libjpeg.so.8` on the loader path (Ubuntu's `libjpeg-turbo8` package, or a copy of that library). That workaround was not run on a Debian container here, so it stays unverified.
+
+Draft for an upstream OculiX issue. It is not filed.
+
+```text
+Title: Linux OCR fails on Debian: bundled libleptonica.so.6 needs libjpeg.so.8
+
+OculiX 4.0.0 (oculixide-4.0.0-linux.jar) on Debian 13, full OpenJDK 21, DISPLAY set to an X11 session.
+
+Image click works. Screen().text() does not.
+
+The Legerix build inside the jar ships libleptonica.so.6 linked against libjpeg.so.8. Debian's libjpeg62-turbo provides libjpeg.so.62 and does not provide libjpeg.so.8 (that soname is Ubuntu's libjpeg-turbo8). OculiX falls back to an external tesseract binary. With tesseract-ocr and libtesseract5 5.5.0 installed, the call still throws UnsatisfiedLinkError for leptonica.
+
+Please build the bundled leptonica against libjpeg.so.62, or ship libjpeg.so.8 next to it, so the in-jar Tesseract loads on both Debian and Ubuntu.
+```
 
 ## Proof of concept
 
@@ -242,7 +268,7 @@ Startup polls `/json/list` with a one-second HTTP timeout and prefers the `page`
 | `py` | One persistent Python 3 process (`TAGUI_PYTHON`, otherwise `python3`). Assignments survive later `py` steps. Printed text is `py_result`. When that text is JSON it is also `py_json`. `py begin` / `py finish` is one block. A Python exception is stored in `py_result` and the flow continues |
 | `r` | One persistent `Rscript` process (`TAGUI_RSCRIPT`). Base R only. Printed text is `r_result`, and JSON text is `r_json`. A missing `Rscript` stops the step and names Rscript |
 | other languages | `TAGUI_LANGUAGE`, or `tagui_language` in `tagui_config.txt`, runs each line through `src/translate.php` and `src/languages/<language>.csv` before the step runs. English skips that |
-| `keyboard`, `mouse`, `vision`, image and coordinate targets | Sent to OculiX or SikuliX when `TAGUI_SIKULI_JAR` or `src/sikulix/oculixide.jar` is present. OCR text from a `read` / `show` / `save` comes back from `tagui_sikuli.txt` |
+| `keyboard`, `mouse`, `vision`, image and coordinate targets | Sent to OculiX or SikuliX when `TAGUI_SIKULI_JAR` or `src/sikulix/oculixide.jar` is present. OCR text from a `read` / `show` / `save` comes back from `tagui_sikuli.txt`. On Debian 13 that OCR call fails (see Linux and OculiX) |
 | `frame name` | the next step or `{ }` block searches inside that frame. `name \| child` nests. Mouse coordinates add the frame's offset |
 | `popup keyword` | the next step or block attaches to the newest page target whose URL contains the keyword, then returns to the parent page |
 | `var = expr` and `var x = ...` | assignments. `exist()`, `present()`, `visible()`, `count()`, `title()`, `url()`, `text()` are calls. `.indexOf`, `.toString`, `.trim`, and `.toLowerCase` stay in PHP. A method or token that parser rejects, including `.replace(/ /g, "_")`, is evaluated in the page scope. `echo`, `dump`, `check`, and conditions use that fallback |
@@ -259,13 +285,15 @@ Flow mode polls for an element until `timeout`. Live mode looks once, matching `
 
 `p1`–`p16` start as empty strings, then take `TAGUI_PARAM_n`, then take non-empty CLI arguments, so the CLI wins. An empty parameter is falsy in a `js` step, which is how `js if (p2)` behaves when the flow was started without that argument.
 
-The process exits 0 after a completed run even when a step set `stopped`. It exits 1 when Chrome fails to start or the flow file is missing. That matches the classic launcher, which reports a successful Casper exit after a step error.
+The modern engine exits 1 when a flow step sets `stopped`, and when Chrome fails to start or the flow file is missing. `src/tagui` and `src/tagui.cmd` pass that status through. Live mode does not set `stopped` (the error is printed and the next line is read), so a live session that reaches `done` still exits 0. A datatable run exits 1 if any row stopped; later rows still run.
+
+The Casper launcher is unchanged. It initializes `tagui_error_code` to 0 and a step error does not raise it, so existing flows and callers that treat a non-zero status as "TagUI itself failed to launch" keep that contract on the default engine. The modern engine is already opt-in (`modern`). A second flag would leave `tagui flow chrome modern` exiting 0, which hides a failed step from `set -e` and from CI. The MCP server still prefers the `ERROR -` line when both are present, so `failing_line` stays the step text.
 
 ### Steps that stay on the CasperJS engine
 
 `test` / xUnit. A `dom begin` / `dom finish` block (a single `dom` statement runs). JavaScript that needs Casper or Phantom: `casper`, `this.getCurrentUrl()`, `require('fs')`, `fs.read`. Those names run in the page and fail there. `8_hastebin` reaches `var fs = require('fs')` and stops with `unknown function require`.
 
-Visual steps with no jar configured stop and name OculiX, Java 11+, and `TAGUI_SIKULI_JAR`. The engine does not download the jar. The run needs a display. Image click against a picture on screen was not part of the headless probe.
+Visual steps with no jar configured stop and name OculiX, Java 11+, and `TAGUI_SIKULI_JAR`. The engine does not download the jar. Linux needs the full JRE and an X11 display. A Debian 13 desktop click of a 260×90 PNG passed. OCR on Debian fails; see Linux and OculiX.
 
 `for n from A to B` accepts integer literals. `for n from 1 to number_of_frgnd_images` in `a_facedetect` stops at `[LINE 18] invalid for loop` after the `.replace` assignment has run. `frame` and `popup` are flow-file blocks. In live mode they print that they are not supported there, which matches the CasperJS live-mode restriction.
 
@@ -292,8 +320,9 @@ Linux, PHP with `pcntl`, `google-chrome-stable`. CasperJS and PhantomJS are not 
 - `php src/test/test_modern_logic.php` covers condition rewrite, both `for` forms, `while` / `break`, datatable rows and `[iteration]`, `load` / `write`, `check`, the shared keyword table, `.replace(/ /g,"_")` through Node, a `js begin` block, persistent `py` (`42` then `240`), a Python error left in `py_result`, a missing `Rscript`, Chinese `输入` / `如果` / `回声`, and a missing OculiX jar.
 - `php src/test/test_modern_browser.php` runs a local fixture in headless Chrome: the same `.replace` assignment in the page (`Tan_Kay_Chen`), `py print(40+2)`, `select`, `upload`, `table`, `show page` (HTML, including `<title>Modern Steps</title>`), `frame`, `popup`, `run`, `api`, `download`, and `receive`. All checks passed.
 - `TAGUI_LANGUAGE=chinese tagui <flow> headless modern quiet` on a one-line flow `回声 "from-cli"` printed `from-cli`.
-- `php src/test/test_modern_sikuli.php`, with `/tmp/oculixide-4.0.0-linux.jar`, OpenJDK 21, and Xvfb `:99`, reached `[0] START`, ran `vision print`, `Screen().text()`, and `keyboard a`. The log showed Jython 2.7.4 and Tesseract 5.5.0 via Legerix. The test skips when the jar, Java, or Xvfb is absent. Rscript is not installed on this VM, so the R path is the missing-binary error.
+- `php src/test/test_modern_sikuli.php`, with `/tmp/oculixide-4.0.0-linux.jar`, OpenJDK 21, and Xvfb `:99` on Ubuntu 24.04, reached `[0] START`, ran `vision print`, a blank-screen `Screen().text()` (SUCCESS, empty text; this VM has `libjpeg.so.8`), `keyboard a`, a missing PNG (`not on screen`), and a Java process killed during a click (reported as exited during the step, without waiting out the timeout). The test skips when the jar, Java, or Xvfb is absent. Rscript is not installed on this VM, so the R path is the missing-binary error.
 - `php src/test/test_modern_screen.php` with `TAGUI_DEVICE_SCALE=2` opened a `file://` URL through a symlink (the landed URL was the real path), reported devicePixelRatio 2, and saved a 100×40 CSS box as a 200×80 PNG. The page snap was about twice the CSS viewport, not four times.
+- `php src/test/test_modern_exit.php` exits 0 for `echo "ready"` and 1 for a step error. With `TZ=Pacific/Auckland`, the START line matches that zone rather than PHP's UTC default.
 - `python3 src/test/test_modern_repair.py` runs `run_flow(..., options=["headless", "modern", "quiet"])` against a missing element. The result has `failing_line` 3, `failing_step` `click missing-button`, and a `snap1.png` path.
 - `python3 src/test/test_modern_live.py` passed the RPA-style exchange (`exist`, `type`, `click`, `read`, `url()`) and `LiveSession(engine="modern")`. The banner arrived without a `tee` pipe.
 - `PYTHONPATH=src/tagui_mcp python3 -m pytest src/tagui_mcp/tests -q` passed 24 tests.
@@ -326,4 +355,4 @@ The browser, logic, datatable, live-mode, and MCP repair paths work, and the ste
 
 Until then, callers opt in with `tagui flow.tag modern` or `modern` in the MCP `options` / `engine` field. The CasperJS engine remains the default. RPA-Python's installer still overlays the Tump files and still patches PhantomJS on macOS. Shipping `modern` as the default inside a Tump zip waits on that same flip.
 
-What is still untested: Windows `tagui.cmd` including the direct log write, OCR of a screen that contains text, OculiX on Windows, a flow with Rscript installed, and any sample against the CasperJS engine. On Apple Silicon, a user confirmed Chrome launch, native OculiX 4.0.0, and an image click after a 2× upscale of a CSS-sized snap. The engine now saves snaps at device pixels so that upscale is the capture itself. That Mac was not re-run after the capture change.
+What is still untested: Windows `tagui.cmd` including the direct log write, OculiX on Windows, a flow with Rscript installed, Wayland, the `libjpeg.so.8` workaround on Debian, and any sample against the CasperJS engine. OCR of visible text failed on Debian 13 (see Linux and OculiX). On a Debian 13 X11 desktop at 1920×1200, an image click of a 260×90 `btn.png` passed. On Apple Silicon, a user confirmed Chrome launch, native OculiX 4.0.0, and an image click after a 2× upscale of a CSS-sized snap. The engine now saves snaps at device pixels so that upscale is the capture itself. That Mac was not re-run after the capture change.

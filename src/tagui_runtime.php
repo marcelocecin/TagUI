@@ -31,6 +31,28 @@ if (!is_string($header) || strlen($header) < 24) return null;
 if (substr($header, 0, 8) !== "\x89PNG\r\n\x1a\n") return null;
 return array('width' => unpack('N', substr($header, 16, 4))[1], 'height' => unpack('N', substr($header, 20, 4))[1]);}
 
+function tagui_local_timezone() {
+$candidates = array();
+$env = getenv('TZ');
+if (is_string($env) && $env !== '') $candidates[] = $env;
+$link = @readlink('/etc/localtime');
+if (is_string($link) && $link !== '') {
+$pos = strpos($link, 'zoneinfo/');
+if ($pos !== false) $candidates[] = substr($link, $pos + strlen('zoneinfo/'));}
+if (is_file('/etc/timezone')) {
+$file = trim((string)file_get_contents('/etc/timezone'));
+if ($file !== '') $candidates[] = $file;}
+foreach ($candidates as $name) {
+try {return new DateTimeZone($name);} catch (Exception $e) {}}
+if (DIRECTORY_SEPARATOR !== '\\') {
+$offset = trim((string)shell_exec('date +%z 2>/dev/null'));
+if (preg_match('/^[+-]\d{4}$/', $offset) === 1) {
+try {return new DateTimeZone(substr($offset, 0, 3) . ':' . substr($offset, 3, 2));} catch (Exception $e) {}}}
+return new DateTimeZone(date_default_timezone_get());}
+
+function tagui_local_stamp() {
+return (new DateTimeImmutable('now', tagui_local_timezone()))->format('D M j Y H:i:s');}
+
 function tagui_which($name) {
 $command = DIRECTORY_SEPARATOR === '\\' ? 'where ' : 'command -v ';
 $out = array();
@@ -338,19 +360,58 @@ private static $last_result = '';
 static function log_path() {return sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'tagui_oculix.log';}
 
 static function startup_failure($log) {
+return self::failure_message('OculiX exited before it was ready.', $log);}
+
+static function step_crash($log) {
+return self::failure_message('OculiX exited during the visual step.', $log);}
+
+static function failure_message($lead, $log) {
 $text = is_file($log) ? (string)file_get_contents($log) : '';
-$message = 'OculiX exited before it was ready.';
-$cause = self::permission_hint($text);
-if ($cause !== '') $message .= ' ' . $cause;
-else {
-$line = self::relevant_line($text);
-if ($line !== '') $message .= ' OculiX said: ' . $line;}
+$message = $lead;
+$errors = self::error_lines($text);
+if ($errors !== '') $message .= ' ' . $errors;
+$cause = self::cause_line($text);
+if ($cause === '') $cause = self::relevant_line($text);
+if ($cause !== '' && !str_contains($message, $cause)) $message .= ' OculiX said: ' . $cause;
+$hint = self::environment_hint($text);
+if ($hint !== '') $message .= ' ' . $hint;
 return $message . ' See ' . $log;}
+
+static function environment_hint($text) {
+$permission = self::permission_hint($text);
+if ($permission !== '') return $permission;
+if (str_contains($text, 'HeadlessException') || str_contains($text, 'running in headless environment')) {
+return 'Java is a headless build. Install the full JRE (not the openjdk-*-jre-headless package) and set DISPLAY to an X11 session. Wayland is untested.';}
+return '';}
 
 static function permission_hint($text) {
 if (str_contains($text, 'Mouse not useable') || str_contains($text, 'Mouse.init')) {
 return 'macOS blocked mouse input. Grant Accessibility and Screen Recording to the app that launches TagUI (Terminal, iTerm, or your IDE), then run the flow again.';}
 return '';}
+
+static function cause_line($text) {
+$lines = preg_split('/\r\n|\n|\r/', (string)$text);
+if (!is_array($lines)) return '';
+foreach ($lines as $line) {
+$line = trim($line);
+if ($line === '' || str_starts_with($line, '[DEBUG')) continue;
+if (preg_match('/^\.\.\. \d+ more$/', $line) === 1) continue;
+if (str_starts_with($line, 'Caused by:') || str_starts_with($line, 'Exception in thread') || preg_match('/\b(?:Exception|Error):/', $line) === 1) {
+if (strlen($line) > 300) $line = substr($line, 0, 300);
+return $line;}}
+return '';}
+
+static function error_lines($text) {
+$lines = preg_split('/\r\n|\n|\r/', (string)$text);
+if (!is_array($lines)) return '';
+$found = array();
+foreach ($lines as $line) {
+$line = trim($line);
+if ($line === '' || stripos($line, '[error]') === false) continue;
+if (strlen($line) > 220) $line = substr($line, 0, 220);
+$found[] = $line;
+if (count($found) >= 4) break;}
+return implode(' ', $found);}
 
 static function relevant_line($text) {
 $lines = preg_split('/\r\n|\n|\r/', trim((string)$text));
@@ -358,6 +419,7 @@ if (!is_array($lines)) return '';
 for ($i = count($lines) - 1; $i >= 0; $i--) {
 $line = trim($lines[$i]);
 if ($line === '' || str_starts_with($line, '[DEBUG')) continue;
+if (preg_match('/^\.\.\. \d+ more$/', $line) === 1) continue;
 if (strlen($line) > 300) $line = substr($line, 0, 300);
 return $line;}
 return '';}
@@ -391,19 +453,30 @@ $text = is_file($out) ? (string)file_get_contents($out) : '';
 if (str_contains($text, $marker)) {
 self::$last_result = trim(substr($text, strpos($text, $marker) + strlen($marker)));
 return str_contains(self::$last_result, 'SUCCESS');}
+if (!self::alive()) throw new RuntimeException(self::step_crash(self::log_path()));
 usleep(200000);}
 throw new RuntimeException('visual step timed out waiting for OculiX');}
 
 static function last_result() {return self::$last_result;}
 
+static function alive() {
+if (!is_resource(self::$process)) return false;
+$status = proc_get_status(self::$process);
+if (is_array($status) && !empty($status['running'])) return true;
+proc_close(self::$process);
+self::$process = null;
+self::$count = 0;
+return false;}
+
 static function start($timeout) {
-if (is_resource(self::$process)) return;
+if (self::alive()) return;
 $jar = self::jar();
 if ($jar === '') {
 throw new RuntimeException('visual step needs OculiX or SikuliX. Set TAGUI_SIKULI_JAR to oculixide.jar (Java 11 or newer). The engine then runs src/tagui.sikuli through that jar. https://github.com/oculix-org/Oculix');}
 $src = dirname(__FILE__);
 $log = self::log_path();
 @unlink($src . '/tagui.sikuli/tagui_sikuli.out');
+file_put_contents($log, '');
 $descriptor = array(
 0 => array('file', DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null', 'r'),
 1 => array('file', $log, 'a'),
@@ -415,16 +488,13 @@ self::$count = 0;
 $deadline = microtime(true) + max(90, (float)$timeout);
 $out = $src . '/tagui.sikuli/tagui_sikuli.out';
 while (microtime(true) < $deadline) {
-$status = proc_get_status($process);
-if (is_array($status) && !$status['running']) {
-throw new RuntimeException(self::startup_failure($log));}
 if (is_file($out) && str_contains((string)file_get_contents($out), '[0] START')) return;
+if (!self::alive()) throw new RuntimeException(self::startup_failure($log));
 usleep(200000);}
-$waiting = self::permission_hint(is_file($log) ? (string)file_get_contents($log) : '');
-$message = 'OculiX did not become ready.';
-if ($waiting !== '') $message .= ' ' . $waiting;
-else $message .= ' A display is required (Xvfb on Linux).';
-throw new RuntimeException($message . ' See ' . $log);}
+$ready = self::failure_message('OculiX did not become ready.', $log);
+if (!str_contains($ready, 'Java is a headless build') && !str_contains($ready, 'macOS blocked')) {
+$ready = str_replace('OculiX did not become ready.', 'OculiX did not become ready. A display is required. On Linux install the full JRE (not the openjdk-*-jre-headless package) and set DISPLAY to an X11 session (Xvfb is enough; Wayland is untested).', $ready);}
+throw new RuntimeException($ready);}
 
 static function text() {
 $path = dirname(__FILE__) . '/tagui.sikuli/tagui_sikuli.txt';

@@ -135,13 +135,13 @@ Omitting `options` on `run_flow` / `run_steps` is quiet mode and TagUI's default
 
 A flow that is only `echo` lines does not need a browser flag. Chrome flags do need Chrome installed.
 
-Every tool returns a JSON object. `ok` is false when TagUI prints `ERROR -`, the process exits non-zero, a dependency is missing, or the call times out. TagUI itself returns exit code 0 after a successful parse even when a later step fails, so `ok` follows the output, not only the exit code.
+Every tool returns a JSON object. `ok` is false when TagUI prints `ERROR -`, the process exits non-zero, a dependency is missing, or the call times out. The Casper engine returns exit code 0 after a successful parse even when a later step fails. The modern engine returns 1 when a flow step fails. `ok` follows the `ERROR -` lines and the exit code; when both are present the step line is the `error` text.
 
 A flow run also returns:
 
 | Field | Meaning |
 | --- | --- |
-| `exit_code` | Process status. `0` can still mean a later step failed |
+| `exit_code` | Process status. Casper can still be `0` when a later step failed. Modern is `1` when a flow step failed |
 | `failing_line` | Line number from TagUI's `[LINE n]` message, when the parser emitted one |
 | `failing_step` | That line of the flow file |
 | `error_message` | First `ERROR -` line, preferring one that names a line |

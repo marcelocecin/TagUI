@@ -247,6 +247,32 @@ unlink($blocked);
 expect('miss score', TaguiSikuli::failure_detail('ERROR not on screen, best similarity 0.41'), 'Image not on screen, best similarity 0.41.');
 expect('miss plain', TaguiSikuli::failure_detail('ERROR'), 'The target was not found on screen.');
 
+$headless_log = tempnam(sys_get_temp_dir(), 'tagui_oculix_');
+file_put_contents($headless_log, "Exception in thread \"main\" java.awt.HeadlessException: running in headless environment\n\tat java.desktop/java.awt.GraphicsEnvironment.checkHeadless(GraphicsEnvironment.java:166)\n\t... 5 more\n");
+$headless_message = TaguiSikuli::startup_failure($headless_log);
+expect('headless cause', str_contains($headless_message, 'HeadlessException'), true);
+expect('headless not tail', str_contains($headless_message, '... 5 more'), false);
+expect('headless jre', str_contains($headless_message, 'full JRE'), true);
+expect('headless display', str_contains($headless_message, 'DISPLAY'), true);
+unlink($headless_log);
+
+$crash_log = tempnam(sys_get_temp_dir(), 'tagui_oculix_');
+file_put_contents($crash_log, "[error] TextRecognizer failed: UnsatisfiedLinkError leptonica\nCaused by: java.lang.UnsatisfiedLinkError: leptonica\n\t... 5 more\n");
+$crash_message = TaguiSikuli::step_crash($crash_log);
+expect('crash error', str_contains($crash_message, '[error] TextRecognizer failed: UnsatisfiedLinkError leptonica'), true);
+expect('crash cause', str_contains($crash_message, 'Caused by: java.lang.UnsatisfiedLinkError: leptonica'), true);
+expect('crash not tail', str_contains($crash_message, '... 5 more'), false);
+expect('crash during', str_contains($crash_message, 'exited during'), true);
+unlink($crash_log);
+
+$saved_tz = getenv('TZ');
+putenv('TZ=Pacific/Auckland');
+$stamp = tagui_local_stamp();
+$zone_now = new DateTimeImmutable('now', new DateTimeZone('Pacific/Auckland'));
+$parsed = DateTimeImmutable::createFromFormat('D M j Y H:i:s', $stamp, new DateTimeZone('Pacific/Auckland'));
+expect('local stamp', $parsed instanceof DateTimeImmutable && abs($parsed->getTimestamp() - $zone_now->getTimestamp()) <= 2, true);
+if ($saved_tz === false) putenv('TZ'); else putenv('TZ=' . $saved_tz);
+
 if ($failures > 0) {fwrite(STDERR, "$failures failed\n"); exit(1);}
 fwrite(STDOUT, "all logic checks passed\n");
 exit(0);
