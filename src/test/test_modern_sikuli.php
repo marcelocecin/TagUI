@@ -1,8 +1,8 @@
 <?php
 
 /* Headless smoke for the OculiX file bridge. Skips when the jar is not present.
-   Image click and OCR are not asserted here: this checks that tagui.sikuli
-   reaches [0] START and runs a vision step that only prints. */
+   A missing PNG must come back as "not on screen". OCR text is not asserted:
+   the Xvfb screen is blank. */
 
 require_once dirname(__DIR__) . '/tagui_modern.php';
 
@@ -43,7 +43,15 @@ else {fwrite(STDERR, "FAIL log missing print\n$log\n"); $failures++;}
 if ($ocr) fwrite(STDOUT, "ok   screen ocr\n");
 else {fwrite(STDERR, "FAIL screen ocr\n$log\n"); $failures++;}
 if ($keys) fwrite(STDOUT, "ok   keyboard\n");
-else {fwrite(STDERR, "FAIL keyboard\n$log\n"); $failures++;}}
+else {fwrite(STDERR, "FAIL keyboard\n$log\n"); $failures++;}
+$missing = sys_get_temp_dir() . '/tagui_missing_' . getmypid() . '.png';
+write_unique_png($missing);
+TaguiSikuli::run('vision wait_timeout = 1; setAutoWaitTimeout(1)', 30);
+$miss = TaguiSikuli::run('click ' . $missing, 20);
+$note = TaguiSikuli::last_result();
+@unlink($missing);
+if (!$miss && str_contains($note, 'not on screen')) fwrite(STDOUT, "ok   image miss ($note)\n");
+else {fwrite(STDERR, "FAIL image miss\n$note\n"); $failures++;}}
 catch (Exception $e) {
 fwrite(STDERR, 'FAIL ' . $e->getMessage() . "\n");
 $log = (string)@file_get_contents(sys_get_temp_dir() . '/tagui_oculix.log');
@@ -54,3 +62,17 @@ if (is_resource($xvfb)) {proc_terminate($xvfb); proc_close($xvfb);}
 if ($failures > 0) exit(1);
 fwrite(STDOUT, "sikuli smoke passed\n");
 exit(0);
+
+function png_chunk($type, $data) {
+return pack('N', strlen($data)) . $type . $data . pack('N', crc32($type . $data));}
+
+function write_unique_png($path) {
+$width = 80; $height = 40; $raw = '';
+for ($y = 0; $y < $height; $y++) {
+$raw .= "\x00";
+for ($x = 0; $x < $width; $x++) {
+$raw .= chr(($x * 17 + $y * 29) & 255);
+$raw .= chr(($x * 53 + 90) & 255);
+$raw .= chr(($y * 41 + 200) & 255);}}
+$ihdr = pack('NNC5', $width, $height, 8, 2, 0, 0, 0);
+file_put_contents($path, "\x89PNG\r\n\x1a\n" . png_chunk('IHDR', $ihdr) . png_chunk('IDAT', gzcompress($raw)) . png_chunk('IEND', ''));}

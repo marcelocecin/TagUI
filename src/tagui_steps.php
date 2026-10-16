@@ -435,7 +435,9 @@ $this->trace($line);
 try {$ok = TaguiSikuli::run($line, max(30.0, (float)$this->timeout));}
 catch (Exception $e) {$this->fail($index, $e->getMessage()); return;}
 $text = TaguiSikuli::text();
-if (!$ok) {$this->fail($index, 'visual step failed - ' . $line); return;}
+if (!$ok) {
+$this->fail($index, 'visual step failed - ' . $line . '. ' . TaguiSikuli::failure_detail(TaguiSikuli::last_result()));
+return;}
 $intent = tagui_keyword_intent($line);
 if ($intent === 'read') {
 $params = trim(substr($line, strpos($line, ' ') + 1));

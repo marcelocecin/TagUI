@@ -172,7 +172,7 @@ The modern engine sends `keyboard`, `mouse`, `vision`, and image or coordinate t
 - `[0] START`, then `vision print(...)` returned SUCCESS and the log contained the print
 - `Screen().text()` returned SUCCESS without a JVM crash
 - `keyboard a` returned SUCCESS and the log showed `TYPE "a"`
-- A `click` of a real PNG was not run. Matching a picture needs that picture on the display
+- A `click` of a real PNG was not run on this blank Xvfb display. The Apple Silicon run below clicked an image once the PNG was the physical-pixel size
 
 ```text
 export TAGUI_SIKULI_JAR=/path/to/oculixide-4.0.0-linux.jar
@@ -180,7 +180,19 @@ export DISPLAY=:99
 tagui flow.tag modern
 ```
 
-The jar for the probe was `oculixide-4.0.0-linux.jar` from the [v4.0.0 release](https://github.com/oculix-org/Oculix/releases/tag/v4.0.0). `-r` wants the IDE jar. `oculixapi` is the library jar. If OculiX exits before `[0] START`, the message points at `tagui_oculix.log` in the temp directory. On Linux with a distro Tesseract installed, that log is where a `TessBaseAPIGetPAGEText` failure shows up. Keep the system `libtesseract` off the loader path so Legerix's copy is the one that loads.
+The jar for the probe was `oculixide-4.0.0-linux.jar` from the [v4.0.0 release](https://github.com/oculix-org/Oculix/releases/tag/v4.0.0). `-r` wants the IDE jar. `oculixapi` is the library jar. If OculiX exits before `[0] START`, the TagUI error includes the cause from `tagui_oculix.log` in the temp directory. `Mouse not useable (blocked)` becomes a macOS permissions hint. On Linux with a distro Tesseract installed, that log is where a `TessBaseAPIGetPAGEText` failure shows up. Keep the system `libtesseract` off the loader path so Legerix's copy is the one that loads.
+
+A missed image is `visual step failed` plus `Image not on screen` and, when OculiX can score a candidate, `best similarity 0.41`. The bridge searches once at the normal similarity, then once more at a very low similarity only to read that score. It does not click the low-scoring match. `Settings.AlwaysResize` stays unset: a global resize would also scale images that were already captured at screen resolution.
+
+### macOS and OculiX
+
+Confirmed on an Apple Silicon Mac with a built-in Retina display (3024×1964), macOS, Java 21 Corretto, and `oculixide-4.0.0-macos.jar`, using `tagui flow chrome modern`:
+
+1. Install Java 11 or newer. Corretto 21 is enough. OculiX 4.0.0 starts natively on ARM64 (OpenCV, Legerix Tesseract 5.5.0, Jython 2.7.4).
+2. Download `oculixide-4.0.0-macos.jar` from the OculiX release. Point `TAGUI_SIKULI_JAR` at that file. The engine runs `java -jar` on `src/tagui.sikuli` with the working directory `src/`.
+3. Grant **Accessibility** and **Screen Recording** to the app that launches TagUI (Terminal, iTerm, or the IDE). Without them OculiX exits with `FATAL: Mouse.init: Mouse not useable (blocked)`. TagUI reports that line and the permission hint instead of only `OculiX exited before it was ready`.
+4. Retina. Sikuli compares PNG pixels with the physical screen. A button that is 260×90 CSS pixels is 520×180 physical pixels at devicePixelRatio 2. `snap` uses `Page.captureScreenshot` with `fromSurface: true` and clip scale 1, which is the device-pixel image. Visible `chrome` does not pass `--force-device-scale-factor=1`, so Chrome keeps the display scale and a new snap matches the screen. Headless still forces scale factor 1 (override with `TAGUI_DEVICE_SCALE`). An image snapped earlier, at CSS size, will miss until it is snapped again. On this Linux VM, `TAGUI_DEVICE_SCALE=2` saved a 100×40 CSS box as a 200×80 PNG.
+5. `file://` URLs are opened at `realpath`. On macOS `/tmp` is a symlink to `/private/tmp`, and `file:///tmp/...` otherwise lands on `chrome-error://chromewebdata/`. The same step with the real path, or with `http://`, opens the page.
 
 ## Proof of concept
 
@@ -198,7 +210,7 @@ The modern path does not pipe through `tee`. `tagui_write_output()` writes each 
 
 `TaguiChrome` picks a binary in this order: `TAGUI_CHROME_BIN`, then `google-chrome-stable`, `/opt/google/chrome/chrome`, Chromium, Edge, and `google-chrome` last. The last position is deliberate. On this VM `/usr/local/bin/google-chrome` is a wrapper that forces port 9222 and a shared profile, which fights a private debugging port. After the Linux names it looks for app bundles under `/Applications`: Google Chrome, Chrome Canary, Edge, Edge Canary, Chromium, and Brave. Those paths are the same on Apple Silicon and Intel macOS. On Windows it looks for Chrome and Edge under `Program Files`, `Program Files (x86)`, and `%LOCALAPPDATA%`. The macOS and Windows lists were not executed here.
 
-The process gets a free port (`127.0.0.1:0`), a profile directory `tagui_modern_profile_<pid>_<hex>` under the temp dir, and `--remote-allow-origins=*` (Chrome 111 and later refuse the websocket without it). Headless uses `--headless=new`. Sandbox is off unless `TAGUI_CHROME_SANDBOX=1`, because containers and CI commonly cannot use the Chrome sandbox. `--no-sandbox` is the default here for that reason. Extra flags disable component extensions and default apps; a stock Chrome otherwise starts a background extension page and the first `/json/list` entry is not the about:blank tab.
+The process gets a free port (`127.0.0.1:0`), a profile directory `tagui_modern_profile_<pid>_<hex>` under the temp dir, and `--remote-allow-origins=*` (Chrome 111 and later refuse the websocket without it). Headless uses `--headless=new` and `--force-device-scale-factor=1`, unless `TAGUI_DEVICE_SCALE` sets another factor. A visible `chrome` window keeps the display scale so Retina snaps match the screen OculiX sees. Sandbox is off unless `TAGUI_CHROME_SANDBOX=1`, because containers and CI commonly cannot use the Chrome sandbox. `--no-sandbox` is the default here for that reason. Extra flags disable component extensions and default apps; a stock Chrome otherwise starts a background extension page and the first `/json/list` entry is not the about:blank tab. `--allow-file-access-from-files` is set, and a `file://` step is rewritten with `realpath` before `Page.navigate`.
 
 Startup polls `/json/list` with a one-second HTTP timeout and prefers the `page` target whose URL is `about:blank`. The websocket timeout is 30 seconds. `Page.enable`, `Runtime.enable`, and `Page.bringToFront` run before the first step. Shutdown closes the socket, signals the process, `pkill`s anything still using that profile path, and deletes the profile. `end_processes` kills leftover `tagui_modern_profile_` processes. The MCP reaper does the same.
 
@@ -206,7 +218,7 @@ Startup polls `/json/list` with a one-second HTTP timeout and prefers the `page`
 
 | Step | Behavior |
 | --- | --- |
-| `http://`, `https://`, `file://` | `Page.navigate`, then poll `document.readyState === "complete"` and a non-blank URL. Minimum wait budget 20 seconds |
+| `http://`, `https://`, `file://` | `Page.navigate`, then poll `document.readyState === "complete"` and a non-blank URL. `file://` is opened at `realpath`, so macOS `/tmp` becomes `/private/tmp`. A `chrome-error://` page is a failed navigation. Minimum wait budget 20 seconds |
 | `click` / `tap`, `rclick` / `rtap`, `dclick` / `dtap`, `hover` / `move` | resolve the locator, then `Input.dispatchMouseEvent` at the element center |
 | `type` / `enter` | focus, optional `[clear]`, `Input.insertText`, and key events for `[enter]`, `[tab]`, `[esc]`, `[space]` |
 | `select` / `choose` | set the matching `<option>` by value or text and dispatch `change`. `[clear]` selects the empty value |
@@ -221,7 +233,7 @@ Startup polls `/json/list` with a one-second HTTP timeout and prefers the `page`
 | `echo` | same quote and concatenation rules as the classic echo step. Mixed `'` and `"` is an error |
 | `check` | `check condition \| true-text \| false-text` prints one of the two texts |
 | `ask` | reads stdin into `ask_result`. A visible `chrome` window uses `prompt()` |
-| `snap` | `Page.captureScreenshot` of the page, or a clip of an element, to `snapN.png` or `snap ... to file` |
+| `snap` | `Page.captureScreenshot` (`fromSurface`, clip scale 1) of the viewport or an element, saved at device pixels. On a 2x Retina display a 260×90 CSS button is a 520×180 PNG, which is the size OculiX searches |
 | `wait` | numeric seconds, default 5, capped at 120. An element wait is still a flow-file feature of the classic engine |
 | `dump expr to file` | writes the value with no extra newline. Booleans are `true` and `false` |
 | `timeout N` | element-find budget in seconds, default 10 |
@@ -281,6 +293,7 @@ Linux, PHP with `pcntl`, `google-chrome-stable`. CasperJS and PhantomJS are not 
 - `php src/test/test_modern_browser.php` runs a local fixture in headless Chrome: the same `.replace` assignment in the page (`Tan_Kay_Chen`), `py print(40+2)`, `select`, `upload`, `table`, `show page` (HTML, including `<title>Modern Steps</title>`), `frame`, `popup`, `run`, `api`, `download`, and `receive`. All checks passed.
 - `TAGUI_LANGUAGE=chinese tagui <flow> headless modern quiet` on a one-line flow `回声 "from-cli"` printed `from-cli`.
 - `php src/test/test_modern_sikuli.php`, with `/tmp/oculixide-4.0.0-linux.jar`, OpenJDK 21, and Xvfb `:99`, reached `[0] START`, ran `vision print`, `Screen().text()`, and `keyboard a`. The log showed Jython 2.7.4 and Tesseract 5.5.0 via Legerix. The test skips when the jar, Java, or Xvfb is absent. Rscript is not installed on this VM, so the R path is the missing-binary error.
+- `php src/test/test_modern_screen.php` with `TAGUI_DEVICE_SCALE=2` opened a `file://` URL through a symlink (the landed URL was the real path), reported devicePixelRatio 2, and saved a 100×40 CSS box as a 200×80 PNG. The page snap was about twice the CSS viewport, not four times.
 - `python3 src/test/test_modern_repair.py` runs `run_flow(..., options=["headless", "modern", "quiet"])` against a missing element. The result has `failing_line` 3, `failing_step` `click missing-button`, and a `snap1.png` path.
 - `python3 src/test/test_modern_live.py` passed the RPA-style exchange (`exist`, `type`, `click`, `read`, `url()`) and `LiveSession(engine="modern")`. The banner arrived without a `tee` pipe.
 - `PYTHONPATH=src/tagui_mcp python3 -m pytest src/tagui_mcp/tests -q` passed 24 tests.
@@ -313,4 +326,4 @@ The browser, logic, datatable, live-mode, and MCP repair paths work, and the ste
 
 Until then, callers opt in with `tagui flow.tag modern` or `modern` in the MCP `options` / `engine` field. The CasperJS engine remains the default. RPA-Python's installer still overlays the Tump files and still patches PhantomJS on macOS. Shipping `modern` as the default inside a Tump zip waits on that same flip.
 
-What is still untested: Windows `tagui.cmd` including the direct log write, element-clipped `snap` as its own assertion, an OculiX image `click` of a real PNG, OCR of a screen that contains text, OculiX on Apple Silicon and Windows, a flow with Rscript installed, and any sample against the CasperJS engine. A macOS Apple Silicon Chrome launch under `/Applications` was confirmed separately on PHP 8.5 with a short example.com flow.
+What is still untested: Windows `tagui.cmd` including the direct log write, OCR of a screen that contains text, OculiX on Windows, a flow with Rscript installed, and any sample against the CasperJS engine. On Apple Silicon, a user confirmed Chrome launch, native OculiX 4.0.0, and an image click after a 2× upscale of a CSS-sized snap. The engine now saves snaps at device pixels so that upscale is the capture itself. That Mac was not re-run after the capture change.

@@ -225,6 +225,28 @@ expect('sikuli message', str_contains($visual->captured[0], 'OculiX'), true);
 expect('sikuli no snap word', str_contains($visual->captured[0], 'cannot find '), false);
 putenv('TAGUI_SIKULI_JAR');
 
+$real_dir = sys_get_temp_dir() . '/tagui_real_' . getmypid();
+mkdir($real_dir);
+file_put_contents($real_dir . '/page.html', 'x');
+$link = sys_get_temp_dir() . '/tagui_link_' . getmypid();
+symlink($real_dir, $link);
+$resolved = tagui_file_url('file://' . $link . '/page.html');
+expect('file symlink', str_contains($resolved, basename(realpath($real_dir))), true);
+expect('file link gone', str_contains($resolved, basename($link)), false);
+expect('https untouched', tagui_file_url('https://example.com/a'), 'https://example.com/a');
+unlink($real_dir . '/page.html');
+unlink($link);
+rmdir($real_dir);
+
+$blocked = tempnam(sys_get_temp_dir(), 'tagui_oculix_');
+file_put_contents($blocked, "INFO: starting\nFATAL: Mouse.init: Mouse not useable (blocked)\n");
+$blocked_message = TaguiSikuli::startup_failure($blocked);
+expect('mouse hint access', str_contains($blocked_message, 'Accessibility'), true);
+expect('mouse hint screen', str_contains($blocked_message, 'Screen Recording'), true);
+unlink($blocked);
+expect('miss score', TaguiSikuli::failure_detail('ERROR not on screen, best similarity 0.41'), 'Image not on screen, best similarity 0.41.');
+expect('miss plain', TaguiSikuli::failure_detail('ERROR'), 'The target was not found on screen.');
+
 if ($failures > 0) {fwrite(STDERR, "$failures failed\n"); exit(1);}
 fwrite(STDOUT, "all logic checks passed\n");
 exit(0);

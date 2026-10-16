@@ -14,7 +14,9 @@ $table = $work . '/grid.csv';
 $download = $work . '/download.html';
 $received = $work . '/received.html';
 $flow = $work . '/steps_flow';
-$page_url = 'file://' . $page;
+$linked = $work . '/via_link';
+symlink(dirname($page), $linked);
+$page_url = 'file://' . $linked . '/steps_page.html';
 file_put_contents($flow, implode("\n", array(
 $page_url,
 'echo \'backtick-\' `title()`',

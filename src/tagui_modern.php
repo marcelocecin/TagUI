@@ -62,7 +62,6 @@ $binary,
 '--remote-allow-origins=*',
 '--user-data-dir=' . $this->profile,
 '--window-size=1366,768',
-'--force-device-scale-factor=1',
 '--no-first-run',
 '--no-default-browser-check',
 '--disable-extensions',
@@ -75,6 +74,11 @@ $binary,
 '--metrics-recording-only',
 '--hide-scrollbars',
 '--allow-file-access-from-files');
+$forced_scale = getenv('TAGUI_DEVICE_SCALE');
+$scale_is_set = is_string($forced_scale) && is_numeric($forced_scale) && (float)$forced_scale > 0;
+if ($headless) {
+$args[] = '--force-device-scale-factor=' . ($scale_is_set ? $forced_scale : '1');}
+else if ($scale_is_set) {$args[] = '--force-device-scale-factor=' . $forced_scale;}
 if ($headless) {array_push($args, '--headless=new', '--disable-gpu');}
 if (getenv('TAGUI_CHROME_SANDBOX') !== '1') {
 array_push($args, '--no-sandbox', '--disable-dev-shm-usage');}
@@ -122,6 +126,8 @@ while (microtime(true) < $deadline) {
 $state = $this->evaluate('document.readyState');
 $href = $this->evaluate('document.location.href');
 $last = is_string($href) ? $href : '';
+if ($state === 'complete' && str_starts_with($last, 'chrome-error://')) {
+throw new RuntimeException('cannot open ' . $url . '. Chrome showed an error page. file:// paths are opened at their real path, so a macOS /tmp symlink becomes /private/tmp.');}
 if ($state === 'complete' && $last !== '' && $last !== 'about:blank') {
 usleep(150000);
 return $last;}
@@ -216,14 +222,37 @@ if ($lower === '[space]') {$part = ' ';}
 $this->command('Input.insertText', array('text' => $part));}
 return true;}
 
+function device_scale() {
+$value = $this->evaluate('window.devicePixelRatio || 1');
+$scale = is_numeric($value) ? (float)$value : 1.0;
+if ($scale < 0.5) $scale = 0.5;
+if ($scale > 4) $scale = 4.0;
+return $scale;}
+
 function screenshot($path, $clip) {
 $params = array('format' => 'png', 'fromSurface' => true);
-if ($clip !== null) $params['clip'] = $clip;
+if ($clip === null) $clip = $this->viewport_clip();
+if (is_array($clip)) {
+$clip['scale'] = 1;
+$params['clip'] = $clip;}
 $result = $this->command('Page.captureScreenshot', $params);
 if (empty($result['data'])) return false;
 $bytes = base64_decode($result['data'], true);
 if ($bytes === false) return false;
 return file_put_contents($path, $bytes) !== false;}
+
+private function viewport_clip() {
+try {$metrics = $this->command('Page.getLayoutMetrics', new stdClass());}
+catch (Exception $e) {return null;}
+$viewport = null;
+if (isset($metrics['cssVisualViewport']) && is_array($metrics['cssVisualViewport'])) $viewport = $metrics['cssVisualViewport'];
+else if (isset($metrics['cssLayoutViewport']) && is_array($metrics['cssLayoutViewport'])) $viewport = $metrics['cssLayoutViewport'];
+if (!is_array($viewport) || empty($viewport['clientWidth']) || empty($viewport['clientHeight'])) return null;
+return array(
+'x' => isset($viewport['pageX']) ? (float)$viewport['pageX'] : 0,
+'y' => isset($viewport['pageY']) ? (float)$viewport['pageY'] : 0,
+'width' => (float)$viewport['clientWidth'],
+'height' => (float)$viewport['clientHeight']);}
 
 private function key_name($key) {
 $codes = array('Enter' => 13, 'Tab' => 9, 'Escape' => 27);
@@ -795,7 +824,7 @@ $this->live = false;}
 
 function go($url, $index) {
 if (!$this->require_chrome($index)) return;
-try {$this->chrome->navigate($url);}
+try {$this->chrome->navigate(tagui_file_url($url));}
 catch (Exception $e) {$this->fail($index, $e->getMessage());}}
 
 function pointer($line, $button, $clicks, $index) {
@@ -876,7 +905,7 @@ if (strcasecmp($target, 'page') !== 0) {
 $info = $this->need($target, $index); if ($info === null) return;
 if ((float)$info['width'] > 0 && (float)$info['height'] > 0) {
 $clip = array('x' => (float)$info['left'], 'y' => (float)$info['top'],
-'width' => (float)$info['width'], 'height' => (float)$info['height'], 'scale' => 1);}}
+'width' => (float)$info['width'], 'height' => (float)$info['height']);}}
 try {if (!$this->chrome->screenshot($file, $clip)) $this->fail($index, 'cannot save snapshot ' . $file);}
 catch (Exception $e) {$this->fail($index, $e->getMessage());}}
 

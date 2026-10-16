@@ -4,6 +4,33 @@
    PHP stays the flow runtime. These are the same external programs the classic
    engine already optional-starts, reached without CasperJS. */
 
+function tagui_file_url($url) {
+$url = (string)$url;
+if (stripos($url, 'file://') !== 0) return $url;
+$rest = substr($url, strlen('file://'));
+if (stripos($rest, 'localhost') === 0) $rest = substr($rest, strlen('localhost'));
+$rest = rawurldecode($rest);
+if (DIRECTORY_SEPARATOR === '\\' && preg_match('#^/([A-Za-z]:.*)$#', $rest, $match)) $rest = $match[1];
+if ($rest === '') return $url;
+$real = realpath($rest);
+if (!is_string($real) || $real === '') return $url;
+$real = str_replace('\\', '/', $real);
+$parts = explode('/', $real);
+$encoded = array();
+foreach ($parts as $part) $encoded[] = $part === '' ? '' : rawurlencode($part);
+$path = implode('/', $encoded);
+if (DIRECTORY_SEPARATOR === '\\') return 'file:///' . ltrim($path, '/');
+return 'file://' . $path;}
+
+function tagui_png_size($path) {
+$handle = fopen($path, 'rb');
+if ($handle === false) return null;
+$header = fread($handle, 24);
+fclose($handle);
+if (!is_string($header) || strlen($header) < 24) return null;
+if (substr($header, 0, 8) !== "\x89PNG\r\n\x1a\n") return null;
+return array('width' => unpack('N', substr($header, 16, 4))[1], 'height' => unpack('N', substr($header, 20, 4))[1]);}
+
 function tagui_which($name) {
 $command = DIRECTORY_SEPARATOR === '\\' ? 'where ' : 'command -v ';
 $out = array();
@@ -306,6 +333,39 @@ TaguiSikuli::stop();}}
 class TaguiSikuli {
 private static $process = null;
 private static $count = 0;
+private static $last_result = '';
+
+static function log_path() {return sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'tagui_oculix.log';}
+
+static function startup_failure($log) {
+$text = is_file($log) ? (string)file_get_contents($log) : '';
+$message = 'OculiX exited before it was ready.';
+$cause = self::permission_hint($text);
+if ($cause !== '') $message .= ' ' . $cause;
+else {
+$line = self::relevant_line($text);
+if ($line !== '') $message .= ' OculiX said: ' . $line;}
+return $message . ' See ' . $log;}
+
+static function permission_hint($text) {
+if (str_contains($text, 'Mouse not useable') || str_contains($text, 'Mouse.init')) {
+return 'macOS blocked mouse input. Grant Accessibility and Screen Recording to the app that launches TagUI (Terminal, iTerm, or your IDE), then run the flow again.';}
+return '';}
+
+static function relevant_line($text) {
+$lines = preg_split('/\r\n|\n|\r/', trim((string)$text));
+if (!is_array($lines)) return '';
+for ($i = count($lines) - 1; $i >= 0; $i--) {
+$line = trim($lines[$i]);
+if ($line === '' || str_starts_with($line, '[DEBUG')) continue;
+if (strlen($line) > 300) $line = substr($line, 0, 300);
+return $line;}
+return '';}
+
+static function failure_detail($result) {
+$note = trim(preg_replace('/^ERROR\s*/', '', (string)$result));
+if ($note !== '' && str_contains($note, 'not on screen')) return 'Image ' . $note . '.';
+return 'The target was not found on screen.';}
 
 static function jar() {
 $env = getenv('TAGUI_SIKULI_JAR');
@@ -328,9 +388,13 @@ $marker = '[' . self::$count . '] ';
 $deadline = microtime(true) + max(5, (float)$timeout);
 while (microtime(true) < $deadline) {
 $text = is_file($out) ? (string)file_get_contents($out) : '';
-if (str_contains($text, $marker)) return str_contains($text, 'SUCCESS');
+if (str_contains($text, $marker)) {
+self::$last_result = trim(substr($text, strpos($text, $marker) + strlen($marker)));
+return str_contains(self::$last_result, 'SUCCESS');}
 usleep(200000);}
 throw new RuntimeException('visual step timed out waiting for OculiX');}
+
+static function last_result() {return self::$last_result;}
 
 static function start($timeout) {
 if (is_resource(self::$process)) return;
@@ -338,7 +402,7 @@ $jar = self::jar();
 if ($jar === '') {
 throw new RuntimeException('visual step needs OculiX or SikuliX. Set TAGUI_SIKULI_JAR to oculixide.jar (Java 11 or newer). The engine then runs src/tagui.sikuli through that jar. https://github.com/oculix-org/Oculix');}
 $src = dirname(__FILE__);
-$log = sys_get_temp_dir() . '/tagui_oculix.log';
+$log = self::log_path();
 @unlink($src . '/tagui.sikuli/tagui_sikuli.out');
 $descriptor = array(
 0 => array('file', DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null', 'r'),
@@ -353,10 +417,14 @@ $out = $src . '/tagui.sikuli/tagui_sikuli.out';
 while (microtime(true) < $deadline) {
 $status = proc_get_status($process);
 if (is_array($status) && !$status['running']) {
-throw new RuntimeException('OculiX exited before it was ready. See ' . $log);}
+throw new RuntimeException(self::startup_failure($log));}
 if (is_file($out) && str_contains((string)file_get_contents($out), '[0] START')) return;
 usleep(200000);}
-throw new RuntimeException('OculiX did not become ready. A display is required (Xvfb on Linux). See ' . $log);}
+$waiting = self::permission_hint(is_file($log) ? (string)file_get_contents($log) : '');
+$message = 'OculiX did not become ready.';
+if ($waiting !== '') $message .= ' ' . $waiting;
+else $message .= ' A display is required (Xvfb on Linux).';
+throw new RuntimeException($message . ' See ' . $log);}
 
 static function text() {
 $path = dirname(__FILE__) . '/tagui.sikuli/tagui_sikuli.txt';
