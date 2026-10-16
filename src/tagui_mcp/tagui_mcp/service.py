@@ -22,7 +22,13 @@ from tagui_mcp.flows import (
     workspace_dir,
 )
 from tagui_mcp.runner import TaguiFailure, resolve_tagui_executable, run_flow, run_steps
-from tagui_mcp.session import BrowserMode, LiveSession, check_live_step, line_needs_flow_parser
+from tagui_mcp.session import (
+    BrowserMode,
+    LiveSession,
+    check_live_step,
+    line_needs_flow_parser,
+    normalize_engine,
+)
 
 _URL = re.compile(r"^https?://\S+$", re.IGNORECASE)
 _UNSAFE_SELECTOR = re.compile(r"[\r\n\x00`]")
@@ -86,9 +92,11 @@ class TaguiService:
                 lambda: self._run_steps(steps, options, inputs, datatable, timeout_seconds)
             )
 
-    def browser_start(self, mode: str = "headless", startup_timeout: float = 90) -> dict[str, object]:
+    def browser_start(
+        self, mode: str = "headless", startup_timeout: float = 90, engine: str = ""
+    ) -> dict[str, object]:
         with self._lock:
-            return self._guard(lambda: self._browser_start(mode, startup_timeout))
+            return self._guard(lambda: self._browser_start(mode, startup_timeout, engine))
 
     def browser_stop(self) -> dict[str, object]:
         with self._lock:
@@ -203,15 +211,17 @@ class TaguiService:
             tagui_bin=self.tagui_bin,
         )
 
-    def _browser_start(self, mode: str, startup_timeout: float) -> dict[str, object]:
+    def _browser_start(self, mode: str, startup_timeout: float, engine: str = "") -> dict[str, object]:
         if self.session.running:
             raise TaguiFailure("browser session already running; call browser_stop first")
         selected = parse_mode(mode)
-        self.session.start(selected, startup_timeout=startup_timeout)
+        chosen = normalize_engine(engine)
+        self.session.start(selected, startup_timeout=startup_timeout, engine=chosen)
         workdir = self.session.workdir
         return {
             "ok": True,
             "mode": selected,
+            "engine": chosen,
             "browser_running": True,
             "work_directory": str(workdir) if workdir is not None else None,
         }

@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html>
+<head><title>Modern PoC</title></head>
+<body>
+<h1 id="heading">Hello TagUI</h1>
+<p>A modern engine page.</p>
+<input id="name" name="name" value="">
+<button id="go">Go</button>
+<div id="out"></div>
+<script>
+document.getElementById("go").addEventListener("click", function () {
+  document.getElementById("out").textContent = document.getElementById("name").value;
+});
+</script>
+</body>
+</html>

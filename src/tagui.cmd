@@ -18,6 +18,7 @@ echo tagui v5.27: use following options and this syntax to run - tagui flow_file
 echo.
 echo chrome   - run on visible Chrome web browser instead of invisible PhantomJS ^(first install Chrome^)
 echo headless - run on invisible Chrome web browser instead of default PhantomJS ^(first install Chrome^)
+echo modern   - run on Chrome through the DevTools Protocol, without CasperJS or PhantomJS
 echo firefox  - run on visible Firefox web browser instead of invisible browser ^(first install Firefox^)
 echo report   - track run result in tagui\src\tagui_report.csv and save html log of automation execution
 echo upload   - upload automation flow and result to hastebin.com ^(expires 30 days after last view^)
@@ -438,6 +439,41 @@ if "%arg9%"=="speed" (
 	set tagui_speed_mode=true
 )
 
+set tagui_modern_mode=false
+rem opt-in Chrome DevTools engine. CasperJS remains the default when this flag is absent.
+if "%arg2%"=="modern" (
+	set arg2=
+	set tagui_modern_mode=true
+)
+if "%arg3%"=="modern" (
+	set arg3=
+	set tagui_modern_mode=true
+)
+if "%arg4%"=="modern" (
+	set arg4=
+	set tagui_modern_mode=true
+)
+if "%arg5%"=="modern" (
+	set arg5=
+	set tagui_modern_mode=true
+)
+if "%arg6%"=="modern" (
+	set arg6=
+	set tagui_modern_mode=true
+)
+if "%arg7%"=="modern" (
+	set arg7=
+	set tagui_modern_mode=true
+)
+if "%arg8%"=="modern" (
+	set arg8=
+	set tagui_modern_mode=true
+)
+if "%arg9%"=="modern" (
+	set arg9=
+	set tagui_modern_mode=true
+)
+
 rem concatenate parameters in order to fix issue when calling casperjs test
 rem $1 left out - filenames with spaces have issue when casperjs $params
 rem Windows still forwards only arg2-arg9 and splits on spaces. The MCP server
@@ -473,6 +509,19 @@ if exist "tagui_chrome.out" del "tagui_chrome.out"
 
 rem default exit code 0 to mean no error parsing automation flow file
 set tagui_error_code=0
+
+rem modern engine owns Chrome itself and does not call CasperJS or PhantomJS
+if "%tagui_modern_mode%"=="true" (
+	if "%tagui_web_browser%"=="firefox" (
+		echo ERROR - modern engine does not support firefox
+		exit /b 1
+	)
+	if "%tagui_web_browser%"=="phantomjs" set tagui_web_browser=headless
+	php -q tagui_modern.php "%flow_file%" %params% | tee -a "%flow_file%.log"
+	set tagui_error_code=!errorlevel!
+	cd /d "%initial_dir%"
+	exit /b !tagui_error_code!
+)
 
 rem transpose datatable csv file if file to be transposed exists
 if exist "%flow_file%_transpose.csv" php -q transpose.php "%flow_file%_transpose.csv" | tee -a "%flow_file%.log"

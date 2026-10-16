@@ -174,6 +174,7 @@ If the script works successfully, you will notice 5 .png files - congratulations
   :----:|:------
   chrome|run on visible Chrome web browser instead of invisible PhantomJS (first install [Chrome](https://www.google.com/chrome/))
   headless|run on invisible Chrome web browser instead of default PhantomJS (first install Chrome)
+  modern|run on Chrome through the DevTools Protocol, without CasperJS or PhantomJS. See [docs/modern-engine.md](docs/modern-engine.md). `headless` is the default browser for this flag; add `chrome` for a visible window. The CasperJS engine remains the default when `modern` is omitted
   firefox|run on visible Firefox web browser instead of invisible browser (first install [Firefox](https://ftp.mozilla.org/pub/firefox/releases/59.0/))
   report|track run result in tagui/src/tagui_report.csv and save html log of automation execution
   upload|upload automation flow and result to [hastebin.com](https://hastebin.com) (expires 30 days after last view)
