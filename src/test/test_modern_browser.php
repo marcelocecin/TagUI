@@ -28,6 +28,10 @@ $page_url,
 'select color as Blue',
 'dom return document.querySelector("#color").value',
 'echo dom_result',
+'js dom_json = {marker: "dom-json-ok"}',
+'dom return dom_json.marker',
+'echo dom_result',
+'download to ' . $work . '/downloads',
 'upload file as ' . $upload,
 'dom return document.querySelector("#file").files.length',
 'echo dom_result',
@@ -68,6 +72,8 @@ fwrite(STDERR, "FAIL $label\n$detail\n");}
 
 check('exit', $code === 0, "exit $code\n$stderr\n$stdout");
 check('select', str_contains($stdout, "\nblue\n") || str_starts_with($stdout, "blue\n"), $stdout);
+check('dom json', str_contains($stdout, 'dom-json-ok'), $stdout);
+check('download dir', is_dir($work . '/downloads'), $work);
 check('backtick title', str_contains($stdout, 'backtick-Modern Steps'), $stdout);
 check('js replace', str_contains($stdout, 'Tan_Kay_Chen'), $stdout);
 check('py result', str_contains($stdout, "\n42\n") || str_contains($stdout, "\n42"), $stdout);
