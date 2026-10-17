@@ -583,6 +583,7 @@ if ($fallback === '') $fallback = $url;}
 return $fallback;}
 
 function follow_newest_page() {
+if (getenv('TAGUI_MODERN_FOLLOW_TABS') !== '1') return;
 if ($this->following || $this->client === null) return;
 $this->following = true;
 try {

@@ -1,8 +1,8 @@
 <?php
 
-/* A target=_blank click opens a second page. The next DOM read must see that
-   page, not the tab the flow started on. Official Chrome stays on the first
-   page socket unless the flow says popup; this engine follows openerId. */
+/* A target=_blank click opens a second page.
+   Default matches official Chrome: DOM steps stay on the first page.
+   TAGUI_MODERN_FOLLOW_TABS=1 adopts the page that click opened. */
 
 $root = dirname(__DIR__, 2);
 $tagui = $root . '/src/tagui';
@@ -18,8 +18,17 @@ file_put_contents($work . '/second.html', <<<'HTML'
 <html><head><title>Second</title></head>
 <body><h1 id="marker">second-tab</h1></body></html>
 HTML);
-$flow = $work . '/tab_flow';
-file_put_contents($flow, implode("\n", array(
+$stay = $work . '/stay_flow';
+$follow = $work . '/follow_flow';
+file_put_contents($stay, implode("\n", array(
+'file://' . $work . '/first.html',
+'click #go',
+'wait 0.5',
+'echo `title()`',
+'read #go to link',
+'echo link',
+'')) . "\n");
+file_put_contents($follow, implode("\n", array(
 'file://' . $work . '/first.html',
 'click #go',
 'wait 0.5',
@@ -28,26 +37,40 @@ file_put_contents($flow, implode("\n", array(
 'echo seen',
 '')) . "\n");
 
-putenv('TAGUI_CHROME_ISOLATED=1');
-$command = escapeshellarg($tagui) . ' ' . escapeshellarg($flow) . ' headless modern quiet speed';
-$descriptor = array(1 => array('pipe', 'w'), 2 => array('pipe', 'w'));
-$process = proc_open($command, $descriptor, $pipes, $work);
 $failures = 0;
 function check($label, $ok, $detail) {
 global $failures;
 if ($ok) {fwrite(STDOUT, "ok   $label\n"); return;}
 $failures++;
 fwrite(STDERR, "FAIL $label\n$detail\n");}
-if (!is_resource($process)) {check('start', false, 'cannot start tagui'); exit(1);}
+
+function run_tab($tagui, $flow, $work) {
+$command = escapeshellarg($tagui) . ' ' . escapeshellarg($flow) . ' headless modern quiet speed';
+$descriptor = array(1 => array('pipe', 'w'), 2 => array('pipe', 'w'));
+$process = proc_open($command, $descriptor, $pipes, $work);
+if (!is_resource($process)) return array(127, '', 'cannot start tagui');
 $stdout = stream_get_contents($pipes[1]);
 $stderr = stream_get_contents($pipes[2]);
 fclose($pipes[1]); fclose($pipes[2]);
-$code = proc_close($process);
-check('exit', $code === 0, "exit $code\n$stderr\n$stdout");
-check('second title', preg_match('/^Second$/m', $stdout) === 1, $stdout . $stderr);
-check('second marker', preg_match('/^second-tab$/m', $stdout) === 1, $stdout . $stderr);
-check('left first', !preg_match('/^First$/m', $stdout), $stdout);
-foreach (array('first.html', 'second.html', 'tab_flow') as $name) @unlink($work . '/' . $name);
+return array(proc_close($process), (string)$stdout, (string)$stderr);}
+
+putenv('TAGUI_CHROME_ISOLATED=1');
+putenv('TAGUI_MODERN_FOLLOW_TABS');
+list($stay_code, $stay_out, $stay_err) = run_tab($tagui, $stay, $work);
+check('default exit', $stay_code === 0, "exit $stay_code\n$stay_err\n$stay_out");
+check('default title', preg_match('/^First$/m', $stay_out) === 1, $stay_out . $stay_err);
+check('default link', preg_match('/^Open$/m', $stay_out) === 1, $stay_out . $stay_err);
+check('default stays', !preg_match('/^Second$/m', $stay_out), $stay_out);
+
+putenv('TAGUI_MODERN_FOLLOW_TABS=1');
+list($follow_code, $follow_out, $follow_err) = run_tab($tagui, $follow, $work);
+check('follow exit', $follow_code === 0, "exit $follow_code\n$follow_err\n$follow_out");
+check('follow title', preg_match('/^Second$/m', $follow_out) === 1, $follow_out . $follow_err);
+check('follow marker', preg_match('/^second-tab$/m', $follow_out) === 1, $follow_out . $follow_err);
+check('follow left first', !preg_match('/^First$/m', $follow_out), $follow_out);
+putenv('TAGUI_MODERN_FOLLOW_TABS');
+
+foreach (array('first.html', 'second.html', 'stay_flow', 'follow_flow') as $name) @unlink($work . '/' . $name);
 @rmdir($work);
 if ($failures > 0) exit(1);
 fwrite(STDOUT, "tab checks passed\n");
