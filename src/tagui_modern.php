@@ -46,13 +46,14 @@ $real = realpath($candidate);
 if (is_string($real) && tagui_is_elf($real)) return $real;}
 return $path;}
 
-function tagui_key_event($type, $key, $code, $vk, $text = null) {
+function tagui_key_event($type, $key, $code, $vk, $text = null, $modifiers = 0) {
 $event = array(
 'type' => $type,
 'key' => $key,
 'code' => $code,
 'windowsVirtualKeyCode' => $vk,
 'nativeVirtualKeyCode' => $vk);
+if ($modifiers !== 0) $event['modifiers'] = $modifiers;
 if ($text !== null) {
 $event['text'] = $text;
 $event['unmodifiedText'] = $text;}
@@ -104,12 +105,13 @@ tagui_key_event('keyUp', $key, $code, $vk, null));}
 
 function tagui_clear_events() {
 $meta = defined('PHP_OS_FAMILY') && PHP_OS_FAMILY === 'Darwin';
-$mod = $meta ? array('Meta', 'MetaLeft', 91) : array('Control', 'ControlLeft', 17);
+$mod = $meta ? array('Meta', 'MetaLeft', 91, 4) : array('Control', 'ControlLeft', 17, 2);
+$bit = $mod[3];
 return array(
-tagui_key_event('keyDown', $mod[0], $mod[1], $mod[2], null),
-tagui_key_event('keyDown', 'a', 'KeyA', 65, null),
-tagui_key_event('keyUp', 'a', 'KeyA', 65, null),
-tagui_key_event('keyUp', $mod[0], $mod[1], $mod[2], null),
+tagui_key_event('keyDown', $mod[0], $mod[1], $mod[2], null, $bit),
+tagui_key_event('keyDown', 'a', 'KeyA', 65, null, $bit),
+tagui_key_event('keyUp', 'a', 'KeyA', 65, null, $bit),
+tagui_key_event('keyUp', $mod[0], $mod[1], $mod[2], null, 0),
 tagui_key_event('keyDown', 'Backspace', 'Backspace', 8, null),
 tagui_key_event('keyUp', 'Backspace', 'Backspace', 8, null));}
 
@@ -654,7 +656,7 @@ $tokens[] = array('id', substr($source, $i, $j - $i)); $i = $j; continue;}
 $two = substr($source, $i, 2);
 if (in_array($two, array('==', '!=', '>=', '<=', '&&', '||'), true)) {
 $tokens[] = array('op', $two); $i += 2; continue;}
-if (str_contains('+-*/<>().,', $c)) {
+if (str_contains('+-*/<>().,!', $c)) {
 $kind = ($c === '(' || $c === ')' || $c === '.' || $c === ',') ? $c : 'op';
 $tokens[] = array($kind, $c); $i++; continue;}
 throw new TaguiExprError('unexpected character in expression');}
@@ -781,6 +783,9 @@ public $run_buffer = '';
 public $timeout = 10.0;
 public $snap_count = 0;
 public $started_at = 0;
+public $steps_ran = 0;
+public $steps_skipped = 0;
+public $blocks_skipped = 0;
 
 function __construct($chrome, $quiet, $flow_path) {
 $this->chrome = $chrome; $this->quiet = $quiet; $this->flow_path = $flow_path;
@@ -798,6 +803,9 @@ if ($arg !== '') $this->vars['p' . $index] = $arg;
 $index++;}}
 
 function run_lines($lines) {
+$this->steps_ran = 0;
+$this->steps_skipped = 0;
+$this->blocks_skipped = 0;
 $this->sync_repo_vars();
 $this->started_at = microtime(true);
 if (!$this->quiet) $this->emit_raw("\nSTART - automation started - " . tagui_local_stamp());
@@ -807,7 +815,15 @@ $url = 'about:blank'; $title = '';
 if ($this->chrome !== null) {try {$url = $this->chrome->url(); $title = $this->chrome->title();} catch (Exception $e) {}}
 $this->emit_raw("\n" . $url . ' - ' . $title);
 $seconds = number_format(microtime(true) - $this->started_at, 1, '.', '');
-$this->emit_raw('FINISH - automation finished - ' . $seconds . 's');}}
+$this->emit_raw('FINISH - automation finished - ' . $seconds . 's');}
+$this->emit_raw($this->run_summary());}
+
+function run_summary() {
+return 'SUMMARY - ran ' . $this->steps_ran . ', skipped ' . $this->steps_skipped . ', blocks skipped ' . $this->blocks_skipped;}
+
+function count_step($active) {
+if ($active) $this->steps_ran++;
+else $this->steps_skipped++;}
 
 function execute_range($lines, $start, $end, $active) {
 $i = $start;
@@ -819,6 +835,8 @@ if ($trimmed === '' || str_starts_with($trimmed, '//')) {$i++; continue;}
 $i = $this->execute_statement($lines, $i, $end, $active);}}
 
 function execute_statement($lines, $i, $end, $active) {
+$mark = trim($lines[$i]);
+if ($mark !== '{' && $mark !== '}') $this->count_step($active);
 $block = $this->language_block($lines, $i, $end);
 if ($block !== null) {
 if ($block['error'] !== '') {if ($active) $this->fail($i, $block['error']); return $block['next'];}
@@ -848,9 +866,15 @@ return $i + 1;}
 
 function execute_if($lines, $i, $end, $active) {
 $matched = false;
+$first = true;
 while ($i <= $end) {
+if (!$first) $this->count_step($active);
+$first = false;
 $base = $this->indent_of($lines[$i]);
-$line = $this->expand_backticks(trim($lines[$i]));
+try {$line = $this->expand_backticks(trim($lines[$i]));}
+catch (TaguiExprError $e) {
+if ($active) $this->fail($i, $e->getMessage());
+return $this->execute_body($lines, $i + 1, $end, false, $base);}
 $lower = strtolower($line);
 $is_else_if = str_starts_with($lower, 'else if ');
 $is_else = ($lower === 'else');
@@ -866,7 +890,12 @@ if ($active && !$matched) {
 $value = $this->truthy_expr($expr, $i);
 $evaluated = !$this->stopped;}
 $take = $evaluated && $value;
-if ($evaluated && !$value) $this->trace('SKIP - ' . trim($lines[$i]));}
+if ($evaluated && !$value) {
+$this->blocks_skipped++;
+$source = trim($lines[$i]);
+if ($this->strict_mode() && $this->is_exist_gate($expr)) {
+$this->fail($i, 'required check failed - cannot find ' . $source);}
+else $this->trace('SKIP - ' . $source);}}
 if ($take) $matched = true;
 $i++;
 $i = $this->execute_body($lines, $i, $end, $take, $base);
@@ -986,6 +1015,8 @@ if ($intent === 'js') {$this->js_step($line, $index); return;}
 if ($intent === 'py') {$this->py_step($line, $index); return;}
 if ($intent === 'r') {$this->r_step($line, $index); return;}
 if ($intent === 'test') {$this->integration_gap($intent, $index); return;}
+if (str_starts_with(strtolower($line), 'expect ') || strtolower($line) === 'expect') {
+$this->trace($line); $this->expect_step($line, $index); return;}
 if ($intent === 'frame' || $intent === 'popup') {
 $this->fail($index, $intent . ' is not supported in live mode. It opens a block around the following steps; put it in a flow file.'); return;}
 if ($this->is_assignment($line)) {$this->assign_step($line, $index); return;}
@@ -1101,11 +1132,53 @@ catch (Exception $e) {$this->fail($index, $e->getMessage());}}
 
 function wait_step($line, $index) {
 $params = trim(substr($line, 4));
+if (str_starts_with(strtolower($line), 'wait ')) $params = trim(substr($line, 5));
+$element = $this->wait_element_target($params);
+if ($element !== null) {$this->wait_for_target($element, $index); return;}
 if ($params === '' || strtolower($params) === 'wait') $seconds = 5.0;
 else $seconds = floatval($params);
 if ($seconds < 0) $seconds = 0;
 if ($seconds > 120) $seconds = 120;
 if ($seconds > 0) usleep((int)($seconds * 1000000));}
+
+function wait_element_mode() {return getenv('TAGUI_MODERN_WAIT_ELEMENT') === '1';}
+
+function strict_mode() {return getenv('TAGUI_MODERN_STRICT') === '1';}
+
+function is_time_wait($params) {
+$params = trim((string)$params);
+if ($params === '' || strtolower($params) === 'wait') return true;
+if (is_numeric($params)) return true;
+return preg_match('/^[+-]?(?:\d+\.?\d*|\.\d+)/', $params) === 1;}
+
+function wait_element_target($params) {
+$params = trim((string)$params);
+if (preg_match('/^(?:for|element)\s+(\S.*)$/i', $params, $match)) return trim($match[1]);
+if ($this->wait_element_mode() && $params !== '' && !$this->is_time_wait($params)) return $params;
+return null;}
+
+function is_exist_gate($expr) {
+return preg_match('/^(?:exist|present|visible)\s*\(.*\)(?:\s*==\s*(?:true|1))?\s*$/i', trim((string)$expr)) === 1;}
+
+function expect_step($line, $index) {
+$target = '';
+if (str_contains($line, ' ')) $target = trim(substr($line, strpos($line, ' ') + 1));
+if ($target === '') {$this->fail($index, 'target missing for ' . $line); return;}
+$this->require_target($target, $index, 'required check failed - cannot find ' . $target);}
+
+function wait_for_target($target, $index) {
+$this->require_target($target, $index, 'cannot find ' . $target);}
+
+function require_target($target, $index, $message) {
+if (tagui_is_visual($target)) {
+try {$found = $this->exists_arg(array($target));}
+catch (TaguiExprError $e) {$this->fail($index, $e->getMessage()); return;}
+if (!$found) $this->fail($index, $message);
+return;}
+if (!$this->require_chrome($index)) return;
+try {$info = $this->chrome->find($target, $this->live);}
+catch (Exception $e) {$this->fail($index, $e->getMessage()); return;}
+if ($info === null) $this->fail($index, $message);}
 
 function dump_step($line, $index) {
 $params = trim(substr($line, 4));
@@ -1420,7 +1493,7 @@ function fail($index, $message) {
 $prefix = 'ERROR - ';
 if ($index >= 0 && !$this->live) $prefix .= '[LINE ' . ($index + 1) . '] ';
 $this->emit($prefix . $message);
-if (!$this->live && $this->chrome !== null && str_contains($message, 'cannot find ')) {
+if (!$this->live && $this->chrome !== null && str_contains($message, 'cannot find ') && method_exists($this->chrome, 'screenshot')) {
 try {$this->chrome->screenshot($this->next_snap(), null);} catch (Exception $e) {}}
 if (!$this->live) $this->stopped = true;}
 
