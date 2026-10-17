@@ -454,7 +454,7 @@ public $clicks = array();
 function evaluate($expression) {
 $this->commands[] = array('evaluate', $expression);
 return array('x' => 8.0, 'y' => 9.0);}
-function click_at($x, $y, $button, $clicks) {$this->clicks[] = array($x, $y, $button, $clicks);}
+function click_at($x, $y, $button, $clicks, $may_open = false) {$this->clicks[] = array($x, $y, $button, $clicks);}
 function command($method, $params) {
 $this->commands[] = array($method, $params);
 return array();}}
@@ -504,8 +504,12 @@ expect('visual abs', $vis->visual_command('click visao/login.png'), 'click /flow
 expect('type image keeps text', $vis->visual_command('type visao/box.png as report.png'), 'type /flows/podio/visao/box.png as report.png');
 expect('visual coords', $vis->visual_command('click (12,34)'), 'click (12,34)');
 expect('visual kept', $vis->visual_command('rclick /abs/mark.png'), 'rclick /abs/mark.png');
-expect('page snap name', $vis->is_page_snap('page.png'), true);
-expect('nested page image', $vis->is_page_snap('visao/page.png'), false);
+expect('chrome page snap', $vis->is_page_snap('page'), true);
+expect('page.png not chrome', $vis->is_page_snap('page.png'), false);
+expect('desktop page.png', $vis->is_desktop_snap('page.png'), true);
+expect('desktop page.bmp', $vis->is_desktop_snap('page.bmp'), true);
+expect('desktop nested', $vis->is_desktop_snap('visao/page.png'), true);
+expect('page not desktop', $vis->is_desktop_snap('page'), false);
 
 class CountingSikuli extends TaguiModern {
 public $image_calls = 0;
@@ -527,13 +531,51 @@ $miss->timeout = 0.35;
 $miss_started = microtime(true);
 expect('exist timeout', $miss->exists_arg(array('visao/nope.png')), false);
 expect('exist waited', $miss->image_calls >= 2 && (microtime(true) - $miss_started) < 2, true);
+class OnceImage extends TaguiModern {
+public $image_calls = 0;
+public $image_command = '';
+function image_present($command) {
+$this->image_calls++;
+$this->image_command = $command;
+return false;}}
+$once = new OnceImage(null, true, '/flows/podio');
+$once->timeout = 30;
+$once_started = microtime(true);
+expect('present once', $once->present_arg(array('visao/licenca2.png')), false);
+expect('present calls', $once->image_calls, 1);
+expect('present fast', (microtime(true) - $once_started) < 1, true);
+expect('present command', $once->image_command, 'present /flows/podio/visao/licenca2.png');
+$seen_once = new OnceImage(null, true, '/flows/podio');
+$seen_once->timeout = 30;
+expect('visible once', $seen_once->visible_arg(array('visao/licenca2.png')), false);
+expect('visible calls', $seen_once->image_calls, 1);
+expect('visible command', $seen_once->image_command, 'visible /flows/podio/visao/licenca2.png');
+class CountingFind {
+public $calls = 0;
+public $lives = array();
+function find($locator, $live) {$this->calls++; $this->lives[] = $live; return null;}}
+$finder = new CountingFind();
+$selector = new TaguiModern($finder, true, '/tmp');
+$selector->timeout = 5;
+$selector_started = microtime(true);
+expect('selector present', $selector->present_arg(array('#login')), false);
+expect('selector visible', $selector->visible_arg(array('#gone')), false);
+expect('selector exist', $selector->exists_arg(array('#login')), false);
+expect('selector calls', $finder->calls, 3);
+expect('selector one shot', $finder->lives, array(true, true, true));
+expect('selector fast', (microtime(true) - $selector_started) < 1, true);
 
 putenv('TAGUI_SIKULI_JAR=/tmp/tagui-missing-oculix.jar');
 $page_snap = new TaguiModern(null, true, '/tmp');
 $page_snap->capture = true;
 $page_snap->execute_range(array('snap page.png to shot.png'), 0, 0, true);
-expect('page.png fullscreen', $page_snap->stopped && str_contains($page_snap->captured[0], 'browser is not open'), true);
-expect('page.png not sikuli', str_contains($page_snap->captured[0], 'OculiX'), false);
+expect('page.png sikuli', $page_snap->stopped && str_contains($page_snap->captured[0], 'OculiX'), true);
+expect('page.png not chrome', str_contains($page_snap->captured[0], 'browser is not open'), false);
+$chrome_snap = new TaguiModern(null, true, '/tmp');
+$chrome_snap->capture = true;
+$chrome_snap->execute_range(array('snap page to shot.png'), 0, 0, true);
+expect('snap page chrome', $chrome_snap->stopped && str_contains($chrome_snap->captured[0], 'browser is not open'), true);
+expect('snap page not sikuli', str_contains($chrome_snap->captured[0], 'OculiX'), false);
 
 class ReadyChrome {
 function find($locator, $live) {return array('found' => true, 'visible' => true);}}
