@@ -132,6 +132,12 @@ function visible(locator) {var info = taguiDescribe(String(locator)); return !!(
 function count(locator) {var info = taguiDescribe(String(locator)); return info && info.count ? info.count : 0;}
 JS;}
 
+function tagui_prepare_js($code) {
+if (preg_match('/\bthis\s*\.\s*(?!echo\b)([A-Za-z_][A-Za-z0-9_]*)/', (string)$code, $match)) {
+throw new RuntimeException('Casper-only step this.' . $match[1]);}
+$rewritten = preg_replace('/\bthis\s*\.\s*echo\s*\(/', 'tagui_echo(', (string)$code);
+return is_string($rewritten) ? $rewritten : (string)$code;}
+
 function tagui_js_program($code, $vars) {
 $box = array();
 if (is_array($vars)) {
@@ -151,9 +157,11 @@ return "(function(){\n" .
 "get: function(target, prop) {return target[prop];},\n" .
 "set: function(target, prop, value) {target[prop] = value; return true;}\n" .
 "});\n" .
-"var tagui_run = new Function(\"tagui_vars\", " . $body_json . ");\n" .
+"var tagui_echos = [];\n" .
+"function tagui_echo(v) {tagui_echos.push(v === undefined || v === null ? '' : String(v));}\n" .
+"var tagui_run = new Function(\"tagui_vars\", \"tagui_echo\", " . $body_json . ");\n" .
 "var tagui_value;\n" .
-"try {tagui_value = tagui_run(tagui_proxy);}\n" .
+"try {tagui_value = tagui_run(tagui_proxy, tagui_echo);}\n" .
 "catch (e) {return {error: String(e && e.message ? e.message : e)};}\n" .
 "var out = {};\n" .
 "for (var k in tagui_box) {\n" .
@@ -161,7 +169,7 @@ return "(function(){\n" .
 "var v = tagui_box[k];\n" .
 "var t = typeof v;\n" .
 "if (v === null || t === \"string\" || t === \"number\" || t === \"boolean\" || (t === \"object\" && v !== null)) out[k] = v;}\n" .
-"return {value: tagui_value === undefined ? null : tagui_value, vars: out};\n" .
+"return {value: tagui_value === undefined ? null : tagui_value, vars: out, echo: tagui_echos};\n" .
 "})()";}
 
 function tagui_js_eval_node($script) {

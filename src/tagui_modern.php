@@ -709,7 +709,10 @@ private $index = 0;
 private $vars;
 private $calls;
 
-function __construct($vars, $calls) {$this->vars = $vars; $this->calls = $calls;}
+private $missing = false;
+
+function __construct($vars, $calls, $missing = false) {
+$this->vars = $vars; $this->calls = $calls; $this->missing = $missing;}
 
 function evaluate($source) {
 $this->tokens = $this->tokenize($source);
@@ -807,6 +810,8 @@ if (!isset($this->calls[$name])) throw new TaguiExprError('unknown function ' . 
 return call_user_func($this->calls[$name], $args);}
 if (is_array($this->vars) && array_key_exists($name, $this->vars)) return $this->vars[$name];
 if ($name === 'true') return true; if ($name === 'false') return false; if ($name === 'null') return null;
+if ($name === 'undefined') return new TaguiUndefined();
+if ($this->missing) return new TaguiUndefined();
 throw new TaguiExprError('variable ' . $name . ' is not defined');}
 throw new TaguiExprError('unexpected token');}
 private function parse_args() {
@@ -829,21 +834,33 @@ if ($name === 'trim') return trim((string)$this->stringish($value));
 if ($name === 'toLowerCase') return strtolower((string)$this->stringish($value));
 throw new TaguiExprError('unknown method ' . $name);}
 private function plus($left, $right) {
+if ($left instanceof TaguiUndefined || $right instanceof TaguiUndefined) return NAN;
 if (is_string($left) || is_string($right)) return $this->stringish($left) . $this->stringish($right);
 if (is_bool($left) || is_bool($right)) return $this->stringish($left) . $this->stringish($right);
 return $this->num($left) + $this->num($right);}
 private function compare($op, $left, $right) {
+if ($left instanceof TaguiUndefined || $right instanceof TaguiUndefined) {
+$same = ($left instanceof TaguiUndefined || $left === null) && ($right instanceof TaguiUndefined || $right === null);
+if ($op === '==') return $same; if ($op === '!=') return !$same;
+return false;}
 if (is_string($left) || is_string($right)) {$left = $this->stringish($left); $right = $this->stringish($right);}
 if ($op === '==') return $left == $right; if ($op === '!=') return $left != $right;
 if ($op === '>') return $left > $right; if ($op === '<') return $left < $right;
 if ($op === '>=') return $left >= $right; return $left <= $right;}
 function truthy($value) {
+if ($value instanceof TaguiUndefined) return false;
 if ($value === false || $value === null || $value === '' || $value === 0 || $value === 0.0) return false;
+if (is_float($value) && is_nan($value)) return false;
 return true;}
 function stringish($value) {
+if ($value instanceof TaguiUndefined) return 'undefined';
 if ($value === true) return 'true'; if ($value === false) return 'false'; if ($value === null) return 'null';
 return (string)$value;}
-private function num($value) {if (is_bool($value)) return $value ? 1 : 0; return $value + 0;}}
+private function num($value) {
+if ($value instanceof TaguiUndefined) return NAN;
+if (is_bool($value)) return $value ? 1 : 0; return $value + 0;}}
+
+class TaguiUndefined {}
 
 /* -------------------------------------------------------------------------- */
 /* Flow interpreter                                                           */
@@ -867,6 +884,7 @@ public $inside_run = false;
 public $run_buffer = '';
 public $timeout = 10.0;
 public $snap_count = 0;
+public $text_count = 0;
 public $started_at = 0;
 public $steps_ran = 0;
 public $steps_skipped = 0;
@@ -922,6 +940,13 @@ $i = $this->execute_statement($lines, $i, $end, $active);}}
 function execute_statement($lines, $i, $end, $active) {
 $mark = trim($lines[$i]);
 if ($mark !== '{' && $mark !== '}') $this->count_step($active);
+if ($this->inside_run) {
+$finish = strtolower($mark) === 'run finish';
+if ($finish) {
+if ($active) $this->run_step('run finish', $i);
+else {$this->inside_run = false; $this->run_buffer = '';}}
+else if ($active) $this->run_buffer .= ($this->run_buffer === '' ? '' : "\n") . $mark;
+return $i + 1;}
 $block = $this->language_block($lines, $i, $end);
 if ($block !== null) {
 if ($block['error'] !== '') {if ($active) $this->fail($i, $block['error']); return $block['next'];}
@@ -1104,6 +1129,7 @@ if (str_starts_with(strtolower($line), 'expect ') || strtolower($line) === 'expe
 $this->trace($line); $this->expect_step($line, $index); return;}
 if ($intent === 'frame' || $intent === 'popup') {
 $this->fail($index, $intent . ' is not supported in live mode. It opens a block around the following steps; put it in a flow file.'); return;}
+if ($this->is_statement_list($line)) {$this->js_run($this->strip_var_keyword($line), $index); return;}
 if ($this->is_assignment($line)) {$this->assign_step($line, $index); return;}
 if (tagui_is_code($line)) {$this->js_run($line, $index); return;}
 $this->fail($index, 'cannot understand step ' . $line);}
@@ -1268,14 +1294,16 @@ if ($info === null) $this->fail($index, $message);}
 
 function dump_step($line, $index) {
 $params = trim(substr($line, 4));
+if ($params === '') {$this->fail($index, 'variable missing for ' . $line); return;}
 $split = stripos($params, ' to ');
-if ($params === '' || $split === false) {$this->fail($index, 'variable missing for ' . $line); return;}
+if ($split === false) {$expr = $params; $file = $this->default_text_file(false);}
+else {
 $expr = trim(substr($params, 0, $split));
-$file = $this->abs_file(trim(substr($params, $split + 4)));
+$file = $this->abs_file(trim(substr($params, $split + 4)));}
 if ($expr === '' || $file === '') {$this->fail($index, 'variable missing for ' . $line); return;}
-try {$value = $this->expr_value($expr);}
+try {$value = $this->expr_value($this->add_concat($expr));}
 catch (TaguiExprError $e) {$this->fail($index, $e->getMessage()); return;}
-file_put_contents($file, $this->stringish($value));}
+if (file_put_contents($file, $this->stringish($value)) === false) $this->fail($index, 'cannot save ' . $file);}
 
 function timeout_step($line, $index) {
 $params = tagui_strip_line_comment(trim(substr($line, 8)));
@@ -1391,6 +1419,7 @@ try {return $this->run_javascript('return (' . $source . ');');}
 catch (Exception $ex) {throw new TaguiExprError($ex->getMessage());}}}
 
 function run_javascript($code) {
+$code = tagui_prepare_js($code);
 $script = tagui_js_program($code, $this->vars);
 if ($this->chrome !== null && method_exists($this->chrome, 'evaluate')) $result = $this->chrome->evaluate($script);
 else $result = tagui_js_eval_node($script);
@@ -1401,6 +1430,8 @@ foreach ($result['vars'] as $key => $value) {
 if (!is_string($key) || !preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $key)) continue;
 if (!array_key_exists($key, $this->vars) && $value === null) continue;
 $this->vars[$key] = $value;}}
+if (isset($result['echo']) && is_array($result['echo'])) {
+foreach ($result['echo'] as $line) $this->emit((string)$line);}
 return array_key_exists('value', $result) ? $result['value'] : null;}
 
 function assign_step($line, $index) {
@@ -1422,7 +1453,13 @@ return array(
 'exist' => function ($args) use ($engine) {return $engine->exists_arg($args);},
 'present' => function ($args) use ($engine) {return $engine->present_arg($args);},
 'visible' => function ($args) use ($engine) {return $engine->visible_arg($args);},
-'count' => function ($args) use ($engine) {return $engine->count_arg($args);});}
+'count' => function ($args) use ($engine) {return $engine->count_arg($args);},
+'timer' => function ($args) use ($engine) {
+if ($engine->started_at <= 0) $engine->started_at = microtime(true);
+return microtime(true) - $engine->started_at;},
+'mouse_xy' => function ($args) use ($engine) {return $engine->mouse_point('xy');},
+'mouse_x' => function ($args) use ($engine) {return $engine->mouse_point('x');},
+'mouse_y' => function ($args) use ($engine) {return $engine->mouse_point('y');});}
 
 function exists_arg($args) {return $this->presence_arg($args, 'present', true);}
 function present_arg($args) {return $this->presence_arg($args, 'present', false);}
@@ -1463,8 +1500,14 @@ $parser = new TaguiExpr($this->vars, $this->calls());
 return $parser->evaluate($source);}
 
 function truthy_expr($source, $index) {
-try {$parser = new TaguiExpr($this->vars, $this->calls()); return $parser->truthy($this->expr_value($source));}
-catch (TaguiExprError $e) {$this->fail($index, $e->getMessage()); return false;}}
+try {
+$parser = new TaguiExpr($this->vars, $this->calls(), true);
+return $parser->truthy($parser->evaluate($source));}
+catch (TaguiExprError $e) {
+if ($this->js_fallback_error($e) && $this->js_runner_available()) {
+try {return (new TaguiExpr($this->vars, $this->calls(), true))->truthy($this->run_javascript('return (' . $source . ');'));}
+catch (Exception $ex) {$this->fail($index, $ex->getMessage()); return false;}}
+$this->fail($index, $e->getMessage()); return false;}}
 
 function condition_expression($line) {
 $trim = trim($line);
@@ -1535,6 +1578,38 @@ function indent_of($line) {
 if (preg_match('/^[ \t]*/', (string)$line, $match)) return strlen($match[0]);
 return 0;}
 
+function mouse_point($which) {
+if ($which === 'x') $command = 'vision xy_mouseLocation = Env.getMouseLocation(); output_sikuli_text(str(xy_mouseLocation.getX()))';
+else if ($which === 'y') $command = 'vision xy_mouseLocation = Env.getMouseLocation(); output_sikuli_text(str(xy_mouseLocation.getY()))';
+else $command = "vision xy_mouseLocation = Env.getMouseLocation(); xy_x = xy_mouseLocation.getX(); xy_y = xy_mouseLocation.getY(); output_sikuli_text('(' + str(xy_x) + ',' + str(xy_y) + ')')";
+try {$ok = TaguiSikuli::run($command, max(30.0, (float)$this->timeout));}
+catch (Exception $e) {throw new TaguiExprError($e->getMessage());}
+if (!$ok) throw new TaguiExprError('cannot read mouse position');
+$text = trim(TaguiSikuli::text());
+if ($which === 'xy') return $text;
+return (int)$text;}
+
+function default_text_file($append) {
+$dir = $this->flow_path !== '' ? $this->flow_path : getcwd();
+if ($append) {if ($this->text_count === 0) $this->text_count = 1;}
+else $this->text_count++;
+return $dir . DIRECTORY_SEPARATOR . 'text' . $this->text_count . '.txt';}
+
+function is_statement_list($line) {
+return (bool)preg_match('/;\s*\S/', $line);}
+
+function strip_var_keyword($line) {
+$stripped = preg_replace('/\bvar\s+/', '', $line);
+return is_string($stripped) ? $stripped : $line;}
+
+function expand_plus_concat($line) {
+$engine = $this;
+$expanded = preg_replace_callback('/([\'"])\\+([A-Za-z_][A-Za-z0-9_]*)\\+\\1/', function ($match) use ($engine) {
+$name = $match[2];
+if (!array_key_exists($name, $engine->vars)) return 'undefined';
+return $engine->stringish($engine->vars[$name]);}, $line);
+return is_string($expanded) ? $expanded : $line;}
+
 function is_assignment($line) {
 if (str_starts_with($line, 'var ')) $line = trim(substr($line, 4));
 return (bool)preg_match('/^[A-Za-z_][A-Za-z0-9_]*\s*=\s*.+$/', $line);}
@@ -1554,7 +1629,7 @@ return preg_replace('/\+{2,}/', '+', $out);}
 function expand_backticks($line) {
 $line = tagui_apply_repository($line, $this->repo);
 $count = substr_count($line, '`');
-if ($count < 2 || ($count % 2) === 1) return $line;
+if ($count < 2 || ($count % 2) === 1) return $this->expand_plus_concat($line);
 $keep = $this->backtick_expression_line($line);
 $engine = $this;
 $expanded = preg_replace_callback('/`([^`]*)`/', function ($match) use ($engine, $keep) {
@@ -1562,7 +1637,7 @@ $inner = $match[1];
 if ($inner === '') return $keep ? "''" : '';
 if ($keep) return "''+(" . $inner . ")+''";
 return $engine->stringish($engine->expr_value($inner));}, $line);
-return $expanded === null ? $line : $expanded;}
+return $this->expand_plus_concat($expanded === null ? $line : $expanded);}
 
 function backtick_expression_line($line) {
 $lower = strtolower(ltrim($line));

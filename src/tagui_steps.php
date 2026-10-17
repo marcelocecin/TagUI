@@ -320,10 +320,21 @@ $bytes = $this->http_get($url);
 if ($bytes === null) {$this->fail($index, 'cannot download ' . $url); return;}
 if (file_put_contents($file, $bytes) === false) $this->fail($index, 'cannot save ' . $file);}
 
-function save_step($line, $index) {$this->transfer_text($line, $index, false);}
-function write_step($line, $index) {$this->transfer_text($line, $index, true);}
+function save_step($line, $index) {$this->transfer_text($line, $index);}
 
-function transfer_text($line, $index, $append) {
+function write_step($line, $index) {
+$params = trim(substr($line, strpos($line, ' ') + 1));
+if ($params === '') {$this->fail($index, 'target missing for ' . $line); return;}
+$split = stripos($params, ' to ');
+$expr = $split === false ? $params : trim(substr($params, 0, $split));
+$file = $split === false ? '' : trim(substr($params, $split + 4));
+if ($expr === '') {$this->fail($index, 'target missing for ' . $line); return;}
+try {$text = $this->stringish($this->expr_value($this->add_concat($expr)));}
+catch (TaguiExprError $e) {$this->fail($index, $e->getMessage()); return;}
+$path = $file === '' ? $this->default_text_file(true) : $this->abs_file($file);
+if (file_put_contents($path, $text . "\r\n", FILE_APPEND) === false) $this->fail($index, 'cannot save ' . $path);}
+
+function transfer_text($line, $index) {
 $params = trim(substr($line, strpos($line, ' ') + 1));
 $split = stripos($params, ' to ');
 $target = $split === false ? $params : trim(substr($params, 0, $split));
@@ -334,15 +345,11 @@ $text = '';
 if (strcasecmp($target, 'page') === 0) {
 if (!$this->require_chrome($index)) return;
 $text = $this->chrome->page_html();}
-else if ($split !== false && $this->is_value_expression($target)) {
-try {$text = $this->stringish($this->expr($target));}
-catch (TaguiExprError $e) {$this->fail($index, $e->getMessage()); return;}}
 else {
 $info = $this->need($target, $index); if ($info === null) return;
 $text = trim((string)$info['text']);}
-$path = $file === '' ? $this->flow_path . DIRECTORY_SEPARATOR . ($append ? 'write' : 'save') . (++$this->snap_count) . '.txt' : $this->abs_file($file);
-$flags = $append ? FILE_APPEND : 0;
-if (file_put_contents($path, $text . ($append ? "\n" : ''), $flags) === false) $this->fail($index, 'cannot save ' . $path);}
+$path = $file === '' ? $this->default_text_file(false) : $this->abs_file($file);
+if (file_put_contents($path, $text) === false) $this->fail($index, 'cannot save ' . $path);}
 
 function load_step($line, $index) {
 $pair = $this->split_keyword($line, ' to ');
@@ -579,14 +586,6 @@ $left = trim(substr($params, 0, $split));
 $right = trim(substr($params, $split + strlen($keyword)));
 if ($left === '' || $right === '') return null;
 return array($left, $right);}
-
-function is_value_expression($target) {
-if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $target)) return true;
-return str_contains($target, "''+(") || str_contains($target, "'+");}
-
-function looks_like_locator($target) {
-return str_contains($target, ' ') || str_contains($target, '#') || str_contains($target, '.')
-|| str_contains($target, '/') || str_contains($target, '(') || str_contains($target, '[');}
 
 function absolute_url($url) {
 if (preg_match('#^[a-z][a-z0-9+.-]*://#i', $url)) return $url;
