@@ -427,6 +427,8 @@ $clear_keys = array();
 foreach ($cleared as $event) {
 if ($event['type'] === 'keyDown') $clear_keys[] = $event['key'] . (isset($event['text']) ? '=' . $event['text'] : '');}
 expect('clear keys', $clear_keys, array('Control', 'a', 'Backspace', 'x=x'));
+$clear_mod = (defined('PHP_OS_FAMILY') && PHP_OS_FAMILY === 'Darwin') ? 4 : 2;
+expect('clear modifier', $cleared[1]['modifiers'], $clear_mod);
 
 class RecordingChrome extends TaguiChrome {
 public $commands = array();
@@ -481,6 +483,7 @@ expect('skip not failure', $skip->stopped, false);
 
 $vis = new TaguiModern(null, true, '/flows/podio');
 expect('visual abs', $vis->visual_command('click visao/login.png'), 'click /flows/podio/visao/login.png');
+expect('type image keeps text', $vis->visual_command('type visao/box.png as report.png'), 'type /flows/podio/visao/box.png as report.png');
 expect('visual coords', $vis->visual_command('click (12,34)'), 'click (12,34)');
 expect('visual kept', $vis->visual_command('rclick /abs/mark.png'), 'rclick /abs/mark.png');
 expect('page snap name', $vis->is_page_snap('page.png'), true);
@@ -513,6 +516,77 @@ $page_snap->capture = true;
 $page_snap->execute_range(array('snap page.png to shot.png'), 0, 0, true);
 expect('page.png fullscreen', $page_snap->stopped && str_contains($page_snap->captured[0], 'browser is not open'), true);
 expect('page.png not sikuli', str_contains($page_snap->captured[0], 'OculiX'), false);
+
+class ReadyChrome {
+function find($locator, $live) {return array('found' => true, 'visible' => true);}}
+class MissingChrome {
+function find($locator, $live) {return null;}}
+$ready = new TaguiModern(new ReadyChrome(), true, '/tmp');
+$ready->capture = true;
+$ready->execute_range(array('expect #login', 'echo "in"'), 0, 1, true);
+expect('expect found', $ready->captured, array('in'));
+expect('expect found continues', $ready->stopped, false);
+$missing = new TaguiModern(new MissingChrome(), true, '/tmp');
+$missing->capture = true;
+$missing->execute_range(array('expect #login', 'echo "no"'), 0, 1, true);
+expect('expect missing', $missing->stopped && str_contains($missing->captured[0], 'required check failed'), true);
+expect('expect stops', in_array('no', $missing->captured, true), false);
+$wait_time = new TaguiModern(new MissingChrome(), true, '/tmp');
+$wait_time->capture = true;
+$wait_time->execute_range(array('wait //*[@id="podio"]', 'echo "after-wait"'), 0, 1, true);
+expect('wait xpath still zero', $wait_time->stopped, false);
+expect('wait xpath continues', $wait_time->captured, array('after-wait'));
+$wait_for = new TaguiModern(new MissingChrome(), true, '/tmp');
+$wait_for->capture = true;
+$wait_for->timeout = 0.2;
+$wait_for->execute_range(array('wait for #login', 'echo "late"'), 0, 1, true);
+expect('wait for missing', $wait_for->stopped && str_contains($wait_for->captured[0], 'cannot find #login'), true);
+expect('wait for stops', in_array('late', $wait_for->captured, true), false);
+$wait_ok = new TaguiModern(new ReadyChrome(), true, '/tmp');
+$wait_ok->capture = true;
+$wait_ok->execute_range(array('wait element #login', 'echo "seen"'), 0, 1, true);
+expect('wait element found', $wait_ok->captured, array('seen'));
+putenv('TAGUI_MODERN_WAIT_ELEMENT=1');
+$wait_env = new TaguiModern(new MissingChrome(), true, '/tmp');
+$wait_env->capture = true;
+$wait_env->timeout = 0.2;
+$wait_env->execute_range(array('wait //*[@id="podio"]', 'echo "nope"'), 0, 1, true);
+expect('wait env element', $wait_env->stopped && str_contains($wait_env->captured[0], 'cannot find //*[@id="podio"]'), true);
+$wait_number = new TaguiModern(new MissingChrome(), true, '/tmp');
+$wait_number->capture = true;
+$wait_number->execute_range(array('wait 0', 'echo "timed"'), 0, 1, true);
+expect('wait number stays time', $wait_number->stopped, false);
+expect('wait number echo', $wait_number->captured, array('timed'));
+putenv('TAGUI_MODERN_WAIT_ELEMENT');
+putenv('TAGUI_MODERN_STRICT=1');
+$strict = new TaguiModern(new MissingChrome(), true, '/tmp');
+$strict->capture = true;
+$strict->execute_range(array('if exist("#login")', 'echo "inside"', 'echo "after-strict"'), 0, 2, true);
+expect('strict exist fails', $strict->stopped && str_contains(implode("\n", $strict->captured), 'required check failed'), true);
+expect('strict stops flow', in_array('after-strict', $strict->captured, true), false);
+$strict_not = new TaguiModern(new ReadyChrome(), true, '/tmp');
+$strict_not->capture = true;
+$strict_not->execute_range(array('if !exist("#login")', 'echo "inside"', 'echo "after-not"'), 0, 2, true);
+expect('strict ignores negated exist', $strict_not->stopped, false);
+expect('strict negated skip', in_array('after-not', $strict_not->captured, true), true);
+expect('strict negated body', in_array('inside', $strict_not->captured, true), false);
+putenv('TAGUI_MODERN_STRICT');
+$loose = new TaguiModern(new MissingChrome(), true, '/tmp');
+$loose->capture = true;
+$loose->quiet = false;
+$loose->execute_range(array('if exist("#login")', 'echo "inside"', 'echo "after-loose"'), 0, 2, true);
+expect('loose exist continues', $loose->stopped, false);
+expect('loose skip', $loose->captured[0], 'SKIP - if exist("#login")');
+expect('loose after', in_array('after-loose', $loose->captured, true), true);
+$summary = new TaguiModern(null, true, '/tmp');
+$summary->capture = true;
+$summary->vars['menu'] = 'salads';
+$summary->run_lines(array('echo "ran"', 'if menu contains "meat"', 'echo "no"'));
+expect('summary counts', array($summary->steps_ran, $summary->steps_skipped, $summary->blocks_skipped), array(2, 1, 1));
+$summary_text = implode("\n", $summary->captured);
+expect('summary line', str_contains($summary_text, 'SUMMARY - ran 2, skipped 1, blocks skipped 1'), true);
+expect('quiet summary', str_contains($summary_text, 'SUMMARY - '), true);
+expect('quiet hides start', str_contains($summary_text, 'START - '), false);
 $routes = array(
 'click (12,34)',
 'keyboard a',
