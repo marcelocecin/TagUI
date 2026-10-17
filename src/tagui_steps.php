@@ -249,7 +249,7 @@ trait TaguiModernSteps {
 function select_step($line, $index) {
 $pair = $this->split_keyword($line, ' as ');
 if ($pair === null) {$this->fail($index, 'target/option missing for ' . $line); return;}
-if (tagui_is_visual($pair[0]) || tagui_is_visual($pair[1])) {$this->visual_gap($index, $line); return;}
+if (tagui_is_visual($pair[0]) || tagui_is_visual($pair[1])) {$this->visual_gap($index, $line, false); return;}
 if ($this->need($pair[0], $index) === null) return;
 $locator = json_encode($pair[0], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 $option = json_encode($pair[1], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -299,7 +299,7 @@ $split = stripos($params, ' to ');
 $target = $split === false ? $params : trim(substr($params, 0, $split));
 $file = $split === false ? '' : trim(substr($params, $split + 4));
 if ($params === '') {$this->fail($index, 'target missing for ' . $line); return;}
-if (tagui_is_visual($target)) {$this->visual_gap($index, $line); return;}
+if (tagui_is_visual($target)) {$this->visual_gap($index, $line, false); return;}
 $text = '';
 if (strcasecmp($target, 'page') === 0) {
 if (!$this->require_chrome($index)) return;
@@ -426,12 +426,32 @@ $condition = str_replace(' JAVASCRIPT_OR ', '||', trim($parts[0]));
 $when_true = str_replace(' JAVASCRIPT_OR ', '||', trim($parts[1]));
 $when_false = str_replace(' JAVASCRIPT_OR ', '||', trim($parts[2]));
 $take = $this->truthy_expr($this->rewrite_condition($condition), $index);
-try {$text = $this->stringish($this->expr($this->add_concat($take ? $when_true : $when_false)));}
+try {$text = $this->stringish($this->expr_value($this->add_concat($take ? $when_true : $when_false)));}
 catch (TaguiExprError $e) {$this->fail($index, $e->getMessage()); return;}
 $this->emit($text);}
 
-function visual_gap($index, $line) {
-$this->fail($index, 'visual step needs Sikuli (sikulix/sikulix.jar), which the modern engine does not start — ' . $line);}
+function visual_gap($index, $line, $trace = true) {
+if ($trace) $this->trace($line);
+try {$ok = TaguiSikuli::run($line, max(30.0, (float)$this->timeout));}
+catch (Exception $e) {$this->fail($index, $e->getMessage()); return;}
+$text = TaguiSikuli::text();
+if (!$ok) {
+$this->fail($index, 'visual step failed - ' . $line . '. ' . TaguiSikuli::failure_detail(TaguiSikuli::last_result()));
+return;}
+$intent = tagui_keyword_intent($line);
+if ($intent === 'read') {
+$params = trim(substr($line, strpos($line, ' ') + 1));
+$split = stripos($params, ' to ');
+if ($split === false) return;
+$name = trim(substr($params, $split + 4));
+if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $name)) $this->vars[$name] = $text;}
+else if ($intent === 'show') $this->emit($text);
+else if ($intent === 'save') {
+$params = trim(substr($line, strpos($line, ' ') + 1));
+$split = stripos($params, ' to ');
+if ($split === false) return;
+$file = $this->abs_file(trim(substr($params, $split + 4)));
+if ($file !== '') file_put_contents($file, $text);}}
 
 function integration_gap($intent, $index) {
 $this->fail($index, $intent . ' stays on the CasperJS engine');}

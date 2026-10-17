@@ -1,5 +1,47 @@
 # SIKULI INTERFACE FOR TAGUI FRAMEWORK ~ TEBEL.ORG #
 
+import codecs
+import sys
+
+# Jython 2 print encodes with the stdout codec. OCR of window chrome includes
+# characters such as an em dash or a registered sign, and the default codec is
+# ASCII, so UnicodeEncodeError kills the process. -Dfile.encoding does not
+# change this stream. Flush each write so the OculiX log sees the line.
+class _Utf8Stream:
+	def __init__(self, stream):
+		self.stream = codecs.getwriter('utf-8')(stream)
+	def write(self, data):
+		self.stream.write(data)
+		self.stream.flush()
+	def flush(self):
+		self.stream.flush()
+	def writelines(self, lines):
+		for line in lines:
+			self.write(line)
+
+if not isinstance(sys.stdout, _Utf8Stream):
+	sys.stdout = _Utf8Stream(sys.stdout)
+	sys.stdout.flush()
+if not isinstance(sys.stderr, _Utf8Stream):
+	sys.stderr = _Utf8Stream(sys.stderr)
+	sys.stderr.flush()
+
+def to_unicode(text):
+	if isinstance(text, unicode):
+		return text
+	if text is None:
+		return u''
+	try:
+		return unicode(text)
+	except:
+		return unicode(str(text), 'utf-8', 'replace')
+
+def write_utf8(path, text):
+	handle = codecs.open(path, 'w', encoding='utf-8')
+	handle.write(to_unicode(text))
+	handle.flush()
+	handle.close()
+
 # timeout in seconds for finding an element
 wait_timeout = 10
 setAutoWaitTimeout(wait_timeout)
@@ -49,6 +91,33 @@ def define_region( input_locator ):
 def file_exists( full_path_and_filename ):
 	import os
 	return os.path.isfile(full_path_and_filename)
+
+# note carried into the out-file when an image is missing from the screen
+tagui_result_note = ''
+
+# exists() uses the default similarity. A miss then scans once at a very low
+# similarity so the out-file can report the best score (HiDPI snaps that are
+# the wrong size show up as a low score).
+def image_found( params ):
+	global tagui_result_note
+	tagui_result_note = ''
+	if exists(params):
+		return True
+	score = None
+	try:
+		setAutoWaitTimeout(0.4)
+		match = find(Pattern(params).similar(0.01))
+		if match:
+			score = match.getScore()
+	except:
+		score = None
+	setAutoWaitTimeout(wait_timeout)
+	if score is None:
+		tagui_result_note = 'not on screen'
+	else:
+		tagui_result_note = 'not on screen, best similarity ' + ('%.2f' % float(score))
+	print '[tagui] NOTFOUND - ' + str(params) + ' ' + tagui_result_note
+	return False
 
 # helper function to return region containing text to interact by text
 def text_locator ( locator ):
@@ -127,10 +196,7 @@ def keyboard_map ( input_keys ):
 
 # function to output sikuli text to tagui
 def output_sikuli_text ( output_text ):
-	import codecs
-	tagui_text = codecs.open('tagui.sikuli/tagui_sikuli.txt','w',encoding='utf8')
-	tagui_text.write(output_text)
-	tagui_text.close()
+	write_utf8('tagui.sikuli/tagui_sikuli.txt', output_text)
 
 # function for tap / click step
 def tap_intent ( raw_intent ):
@@ -139,7 +205,7 @@ def tap_intent ( raw_intent ):
 	if is_coordinates(params):
 		return click(Location(x_coordinate(params),y_coordinate(params)))
 	elif file_exists(params):
-		if exists(params):
+		if image_found(params):
 			return click(params)
 		else:
 			return 0
@@ -153,7 +219,7 @@ def rtap_intent ( raw_intent ):
 	if is_coordinates(params):
 		return rightClick(Location(x_coordinate(params),y_coordinate(params)))
 	elif file_exists(params):
-		if exists(params):
+		if image_found(params):
 			return rightClick(params)
 		else:
 			return 0
@@ -167,7 +233,7 @@ def dtap_intent ( raw_intent ):
 	if is_coordinates(params):
 		return doubleClick(Location(x_coordinate(params),y_coordinate(params)))
 	elif file_exists(params):
-		if exists(params):
+		if image_found(params):
 			return doubleClick(params)
 		else:
 			return 0
@@ -181,7 +247,7 @@ def hover_intent ( raw_intent ):
 	if is_coordinates(params):
 		return hover(Location(x_coordinate(params),y_coordinate(params)))
 	elif file_exists(params):
-		if exists(params):
+		if image_found(params):
 			return hover(params)
 		else:
 			return 0
@@ -207,7 +273,7 @@ def type_intent ( raw_intent ):
 		else:
 			return type(Location(x_coordinate(param1),y_coordinate(param1)),param2,modifier_keys)
 	elif file_exists(param1):
-		if exists(param1):
+		if image_found(param1):
 			if modifier_keys == 0:
 				return type(param1,param2)
 			else:
@@ -234,7 +300,7 @@ def select_intent ( raw_intent ):
 			if is_coordinates(param2):
 				return click(Location(x_coordinate(param2),y_coordinate(param2)))
 			elif file_exists(param2):
-				if exists(param2):
+				if image_found(param2):
 					return click(param2)
 				else:
 					return 0
@@ -242,7 +308,7 @@ def select_intent ( raw_intent ):
 				return click(text_locator(param2))
  
 	elif file_exists(param1):
-		if exists(param1):
+		if image_found(param1):
 			if click(param1) == 0:
 				return 0
 			else:
@@ -250,7 +316,7 @@ def select_intent ( raw_intent ):
 				if is_coordinates(param2):
 					return click(Location(x_coordinate(param2),y_coordinate(param2)))
 				elif file_exists(param2):
-					if exists(param2):
+					if image_found(param2):
 						return click(param2)
 					else:
 						return 0
@@ -267,7 +333,7 @@ def select_intent ( raw_intent ):
 			if is_coordinates(param2):
 				return click(Location(x_coordinate(param2),y_coordinate(param2)))
 			elif file_exists(param2):
-				if exists(param2):
+				if image_found(param2):
 					return click(param2)
 				else:
 					return 0
@@ -303,7 +369,7 @@ def text_read ( raw_intent ):
 		output_sikuli_text(temp_text)
 		return 1
 	elif file_exists(param1):
-		if exists(param1):
+		if image_found(param1):
 			matched_element = find(param1)
 			temp_text = matched_element.text()
 			output_sikuli_text(temp_text)
@@ -339,7 +405,7 @@ def snap_intent ( raw_intent ):
 		shutil.copy(temp_snap_file,param2)
 		return 1
 	elif file_exists(param1):
-		if exists(param1):
+		if image_found(param1):
 			fullscreen_layer = Screen()
 			matched_element = find(param1)
 			temp_snap_file = fullscreen_layer.capture(matched_element).getFile()
@@ -397,7 +463,7 @@ def visible_intent ( raw_intent ):
 	params = (raw_intent + ' ')[1+(raw_intent + ' ').find(' '):].strip()
 	print '[tagui] ACTION - ' + raw_intent.strip()
 	if file_exists(params):
-		if exists(params):
+		if image_found(params):
 			setAutoWaitTimeout(wait_timeout)
 			return 1
 		else:
@@ -478,9 +544,7 @@ def parse_intent ( script_line ):
 		return 0 
 
 # write to interface out-file to signal ready for inputs
-tagui_output = open('tagui.sikuli/tagui_sikuli.out','w')
-tagui_output.write('[0] START')
-tagui_output.close()
+write_utf8('tagui.sikuli/tagui_sikuli.out', '[0] START')
 
 # initialise interface in-file before starting main loop
 tagui_input = open('tagui.sikuli/tagui_sikuli.in','w')
@@ -504,9 +568,7 @@ while True:
 		break
 	elif not tagui_intent:
 		tagui_count = '0'
-		tagui_output = open('tagui.sikuli/tagui_sikuli.out','w')
-		tagui_output.write('[0] START')
-		tagui_output.close()
+		write_utf8('tagui.sikuli/tagui_sikuli.out', '[0] START')
 		wait(scan_period)
 		continue
 
@@ -526,16 +588,15 @@ while True:
 		intent_result_string = 'SUCCESS'
 	else:
 		intent_result_string = 'ERROR'
+		if tagui_result_note:
+			intent_result_string = intent_result_string + ' ' + tagui_result_note
+	tagui_result_note = ''
 
 	# save intent_result to interface out-file
 	print '[tagui] OUTPUT - ' + '[' + tagui_count + '] ' + intent_result_string; print
-	tagui_output = open('tagui.sikuli/tagui_sikuli.out','w')
-	tagui_output.write('[' + tagui_count + '] ' + intent_result_string)
-	tagui_output.close()
+	write_utf8('tagui.sikuli/tagui_sikuli.out', '[' + tagui_count + '] ' + intent_result_string)
 	wait(scan_period)
 
 # write to interface out-file to signal finish listening
 print '[tagui] FINISH - stopped listening'
-tagui_output = open('tagui.sikuli/tagui_sikuli.out','w')
-tagui_output.write('[0] FINISH')
-tagui_output.close()
+write_utf8('tagui.sikuli/tagui_sikuli.out', '[0] FINISH')

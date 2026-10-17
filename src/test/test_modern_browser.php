@@ -14,10 +14,17 @@ $table = $work . '/grid.csv';
 $download = $work . '/download.html';
 $received = $work . '/received.html';
 $flow = $work . '/steps_flow';
-$page_url = 'file://' . $page;
+$linked = $work . '/via_link';
+symlink(dirname($page), $linked);
+$page_url = 'file://' . $linked . '/steps_page.html';
 file_put_contents($flow, implode("\n", array(
 $page_url,
 'echo \'backtick-\' `title()`',
+'profile_name = "Tan Kay Chen"',
+'profile_name = profile_name.replace(/ /g,"_")',
+'echo profile_name',
+'py print(40+2)',
+'echo py_result',
 'select color as Blue',
 'dom return document.querySelector("#color").value',
 'echo dom_result',
@@ -62,6 +69,8 @@ fwrite(STDERR, "FAIL $label\n$detail\n");}
 check('exit', $code === 0, "exit $code\n$stderr\n$stdout");
 check('select', str_contains($stdout, "\nblue\n") || str_starts_with($stdout, "blue\n"), $stdout);
 check('backtick title', str_contains($stdout, 'backtick-Modern Steps'), $stdout);
+check('js replace', str_contains($stdout, 'Tan_Kay_Chen'), $stdout);
+check('py result', str_contains($stdout, "\n42\n") || str_contains($stdout, "\n42"), $stdout);
 check('upload', str_contains($stdout, "\n1\n"), $stdout);
 check('table', is_file($table) && str_contains((string)file_get_contents($table), 'A') && str_contains((string)file_get_contents($table), '1'), (string)@file_get_contents($table));
 check('show page html', str_contains($stdout, 'show page -') && str_contains($stdout, '<title>Modern Steps</title>'), substr($stdout, 0, 500));

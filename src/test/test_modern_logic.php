@@ -163,6 +163,148 @@ restore_error_handler();
 expect('ws deprecations', $ws_warnings, array());
 expect('ws options declared', property_exists('WebSocket\\Base', 'options'), true);
 
+$js = new TaguiModern(null, true, '/tmp');
+$js->capture = true;
+$js->execute_range(array(
+'profile_name = "Tan Kay Chen"',
+'profile_name = profile_name.replace(/ /g,"_")',
+'echo profile_name',
+'js begin',
+'profile_name = profile_name.replace(/_/g, "-")',
+'js finish',
+'echo profile_name'), 0, 6, true);
+expect('js replace', $js->captured, array('Tan_Kay_Chen', 'Tan-Kay-Chen'));
+expect('js stopped', $js->stopped, false);
+TaguiHelpers::shutdown();
+
+$py = new TaguiModern(null, true, '/tmp');
+$py->capture = true;
+$py->execute_range(array(
+'py a = 40',
+'py print(a + 2)',
+'echo py_result',
+'py begin',
+'print(a * 6)',
+'py finish',
+'echo py_result'), 0, 6, true);
+expect('py result', $py->captured, array('42', '240'));
+expect('py json', $py->vars['py_json'], 240);
+expect('py stopped', $py->stopped, false);
+TaguiHelpers::shutdown();
+
+$pybad = new TaguiModern(null, true, '/tmp');
+$pybad->capture = true;
+$pybad->execute_range(array('py print(no_such_name)', 'echo py_result'), 0, 1, true);
+expect('py error continues', $pybad->stopped, false);
+expect('py error text', str_contains($pybad->captured[0], 'ERROR -'), true);
+TaguiHelpers::shutdown();
+
+$r = new TaguiModern(null, true, '/tmp');
+$r->capture = true;
+putenv('TAGUI_RSCRIPT=');
+$r->execute_range(array('r print(1)'), 0, 0, true);
+expect('r missing', $r->stopped, true);
+expect('r message', str_contains($r->captured[0], 'Rscript'), true);
+TaguiHelpers::shutdown();
+
+$zh = tagui_translate_lines(array('输入 search-box 为 github', '如果 cupcakes 多过或等于 12'), 'chinese');
+expect('zh type', $zh[0], 'type search-box as github');
+expect('zh if', $zh[1], 'if cupcakes more than or equals to 12');
+$zh_engine = new TaguiModern(null, true, '/tmp');
+$zh_engine->capture = true;
+$spoken = tagui_translate_lines(array('回声 "nihao"'), 'chinese');
+$zh_engine->execute_range($spoken, 0, 0, true);
+expect('zh echo', $zh_engine->captured, array('nihao'));
+
+$visual = new TaguiModern(null, true, '/tmp');
+$visual->capture = true;
+putenv('TAGUI_SIKULI_JAR=/tmp/tagui-missing-oculix.jar');
+$visual->execute_range(array('vision print(1)'), 0, 0, true);
+expect('sikuli missing', $visual->stopped, true);
+expect('sikuli message', str_contains($visual->captured[0], 'OculiX'), true);
+expect('sikuli no snap word', str_contains($visual->captured[0], 'cannot find '), false);
+putenv('TAGUI_SIKULI_JAR');
+
+$traced = new TaguiModern(null, false, '/tmp');
+$traced->capture = true;
+putenv('TAGUI_SIKULI_JAR=/tmp/tagui-missing-oculix.jar');
+$traced->execute_range(array('read btn.png to seen'), 0, 0, true);
+$traced_lines = array();
+foreach ($traced->captured as $row) {if ($row === 'read btn.png to seen') $traced_lines[] = $row;}
+expect('read traced once', count($traced_lines), 1);
+putenv('TAGUI_SIKULI_JAR');
+
+$chrome_root = sys_get_temp_dir() . '/tagui_chromium_' . getmypid();
+mkdir($chrome_root . '/bin', 0700, true);
+mkdir($chrome_root . '/lib/chromium', 0700, true);
+$wrapper = $chrome_root . '/bin/chromium';
+$elf = $chrome_root . '/lib/chromium/chromium';
+file_put_contents($wrapper, "#!/bin/sh\nexec true\n");
+file_put_contents($elf, "\x7fELF");
+chmod($wrapper, 0755);
+chmod($elf, 0755);
+$chrome = $chrome_root . '/bin/google-chrome';
+file_put_contents($chrome, "#!/bin/sh\nexec true\n");
+chmod($chrome, 0755);
+expect('chromium wrapper', tagui_unwrap_chromium($wrapper), realpath($elf));
+expect('chromium elf', tagui_unwrap_chromium($elf), $elf);
+expect('chrome left alone', tagui_unwrap_chromium($chrome), $chrome);
+unlink($wrapper);
+unlink($elf);
+unlink($chrome);
+rmdir($chrome_root . '/bin');
+rmdir($chrome_root . '/lib/chromium');
+rmdir($chrome_root . '/lib');
+rmdir($chrome_root);
+
+$real_dir = sys_get_temp_dir() . '/tagui_real_' . getmypid();
+mkdir($real_dir);
+file_put_contents($real_dir . '/page.html', 'x');
+$link = sys_get_temp_dir() . '/tagui_link_' . getmypid();
+symlink($real_dir, $link);
+$resolved = tagui_file_url('file://' . $link . '/page.html');
+expect('file symlink', str_contains($resolved, basename(realpath($real_dir))), true);
+expect('file link gone', str_contains($resolved, basename($link)), false);
+expect('https untouched', tagui_file_url('https://example.com/a'), 'https://example.com/a');
+unlink($real_dir . '/page.html');
+unlink($link);
+rmdir($real_dir);
+
+$blocked = tempnam(sys_get_temp_dir(), 'tagui_oculix_');
+file_put_contents($blocked, "INFO: starting\nFATAL: Mouse.init: Mouse not useable (blocked)\n");
+$blocked_message = TaguiSikuli::startup_failure($blocked);
+expect('mouse hint access', str_contains($blocked_message, 'Accessibility'), true);
+expect('mouse hint screen', str_contains($blocked_message, 'Screen Recording'), true);
+unlink($blocked);
+expect('miss score', TaguiSikuli::failure_detail('ERROR not on screen, best similarity 0.41'), 'Image not on screen, best similarity 0.41.');
+expect('miss plain', TaguiSikuli::failure_detail('ERROR'), 'The target was not found on screen.');
+
+$headless_log = tempnam(sys_get_temp_dir(), 'tagui_oculix_');
+file_put_contents($headless_log, "Exception in thread \"main\" java.awt.HeadlessException: running in headless environment\n\tat java.desktop/java.awt.GraphicsEnvironment.checkHeadless(GraphicsEnvironment.java:166)\n\t... 5 more\n");
+$headless_message = TaguiSikuli::startup_failure($headless_log);
+expect('headless cause', str_contains($headless_message, 'HeadlessException'), true);
+expect('headless not tail', str_contains($headless_message, '... 5 more'), false);
+expect('headless jre', str_contains($headless_message, 'full JRE'), true);
+expect('headless display', str_contains($headless_message, 'DISPLAY'), true);
+unlink($headless_log);
+
+$crash_log = tempnam(sys_get_temp_dir(), 'tagui_oculix_');
+file_put_contents($crash_log, "[error] TextRecognizer failed: UnsatisfiedLinkError leptonica\nCaused by: java.lang.UnsatisfiedLinkError: leptonica\n\t... 5 more\n");
+$crash_message = TaguiSikuli::step_crash($crash_log);
+expect('crash error', str_contains($crash_message, '[error] TextRecognizer failed: UnsatisfiedLinkError leptonica'), true);
+expect('crash cause', str_contains($crash_message, 'Caused by: java.lang.UnsatisfiedLinkError: leptonica'), true);
+expect('crash not tail', str_contains($crash_message, '... 5 more'), false);
+expect('crash during', str_contains($crash_message, 'exited during'), true);
+unlink($crash_log);
+
+$saved_tz = getenv('TZ');
+putenv('TZ=Pacific/Auckland');
+$stamp = tagui_local_stamp();
+$zone_now = new DateTimeImmutable('now', new DateTimeZone('Pacific/Auckland'));
+$parsed = DateTimeImmutable::createFromFormat('D M j Y H:i:s', $stamp, new DateTimeZone('Pacific/Auckland'));
+expect('local stamp', $parsed instanceof DateTimeImmutable && abs($parsed->getTimestamp() - $zone_now->getTimestamp()) <= 2, true);
+if ($saved_tz === false) putenv('TZ'); else putenv('TZ=' . $saved_tz);
+
 if ($failures > 0) {fwrite(STDERR, "$failures failed\n"); exit(1);}
 fwrite(STDOUT, "all logic checks passed\n");
 exit(0);

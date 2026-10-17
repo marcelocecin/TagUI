@@ -22,6 +22,31 @@ require_once __DIR__ . '/ws/BadUriException.php';
 require_once __DIR__ . '/ws/ConnectionException.php';
 require_once __DIR__ . '/tagui_steps.php';
 
+function tagui_is_elf($path) {
+if (!is_string($path) || !is_file($path) || !is_executable($path)) return false;
+$handle = fopen($path, 'rb');
+if ($handle === false) return false;
+$magic = fread($handle, 4);
+fclose($handle);
+return $magic === "\x7fELF";}
+
+function tagui_unwrap_chromium($path) {
+if (!is_string($path) || $path === '' || !is_file($path)) return $path;
+$base = basename($path);
+if ($base !== 'chromium' && $base !== 'chromium-browser') return $path;
+if (tagui_is_elf($path)) return $path;
+$dir = dirname($path);
+$candidates = array(
+$dir . '/../lib/chromium/chromium',
+$dir . '/../lib/chromium-browser/chromium-browser',
+'/usr/lib/chromium/chromium',
+'/usr/lib/chromium-browser/chromium-browser');
+foreach ($candidates as $candidate) {
+$real = realpath($candidate);
+if (is_string($real) && tagui_is_elf($real)) return $real;}
+return $path;}
+require_once __DIR__ . '/tagui_runtime.php';
+
 /* -------------------------------------------------------------------------- */
 /* Chrome / Edge                                                              */
 /* -------------------------------------------------------------------------- */
@@ -61,7 +86,6 @@ $binary,
 '--remote-allow-origins=*',
 '--user-data-dir=' . $this->profile,
 '--window-size=1366,768',
-'--force-device-scale-factor=1',
 '--no-first-run',
 '--no-default-browser-check',
 '--disable-extensions',
@@ -74,6 +98,11 @@ $binary,
 '--metrics-recording-only',
 '--hide-scrollbars',
 '--allow-file-access-from-files');
+$forced_scale = getenv('TAGUI_DEVICE_SCALE');
+$scale_is_set = is_string($forced_scale) && is_numeric($forced_scale) && (float)$forced_scale > 0;
+if ($headless) {
+$args[] = '--force-device-scale-factor=' . ($scale_is_set ? $forced_scale : '1');}
+else if ($scale_is_set) {$args[] = '--force-device-scale-factor=' . $forced_scale;}
 if ($headless) {array_push($args, '--headless=new', '--disable-gpu');}
 if (getenv('TAGUI_CHROME_SANDBOX') !== '1') {
 array_push($args, '--no-sandbox', '--disable-dev-shm-usage');}
@@ -121,6 +150,8 @@ while (microtime(true) < $deadline) {
 $state = $this->evaluate('document.readyState');
 $href = $this->evaluate('document.location.href');
 $last = is_string($href) ? $href : '';
+if ($state === 'complete' && str_starts_with($last, 'chrome-error://')) {
+throw new RuntimeException('cannot open ' . $url . '. Chrome showed an error page. file:// paths are opened at their real path, so a macOS /tmp symlink becomes /private/tmp.');}
 if ($state === 'complete' && $last !== '' && $last !== 'about:blank') {
 usleep(150000);
 return $last;}
@@ -215,14 +246,37 @@ if ($lower === '[space]') {$part = ' ';}
 $this->command('Input.insertText', array('text' => $part));}
 return true;}
 
+function device_scale() {
+$value = $this->evaluate('window.devicePixelRatio || 1');
+$scale = is_numeric($value) ? (float)$value : 1.0;
+if ($scale < 0.5) $scale = 0.5;
+if ($scale > 4) $scale = 4.0;
+return $scale;}
+
 function screenshot($path, $clip) {
 $params = array('format' => 'png', 'fromSurface' => true);
-if ($clip !== null) $params['clip'] = $clip;
+if ($clip === null) $clip = $this->viewport_clip();
+if (is_array($clip)) {
+$clip['scale'] = 1;
+$params['clip'] = $clip;}
 $result = $this->command('Page.captureScreenshot', $params);
 if (empty($result['data'])) return false;
 $bytes = base64_decode($result['data'], true);
 if ($bytes === false) return false;
 return file_put_contents($path, $bytes) !== false;}
+
+private function viewport_clip() {
+try {$metrics = $this->command('Page.getLayoutMetrics', new stdClass());}
+catch (Exception $e) {return null;}
+$viewport = null;
+if (isset($metrics['cssVisualViewport']) && is_array($metrics['cssVisualViewport'])) $viewport = $metrics['cssVisualViewport'];
+else if (isset($metrics['cssLayoutViewport']) && is_array($metrics['cssLayoutViewport'])) $viewport = $metrics['cssLayoutViewport'];
+if (!is_array($viewport) || empty($viewport['clientWidth']) || empty($viewport['clientHeight'])) return null;
+return array(
+'x' => isset($viewport['pageX']) ? (float)$viewport['pageX'] : 0,
+'y' => isset($viewport['pageY']) ? (float)$viewport['pageY'] : 0,
+'width' => (float)$viewport['clientWidth'],
+'height' => (float)$viewport['clientHeight']);}
 
 private function key_name($key) {
 $codes = array('Enter' => 13, 'Tab' => 9, 'Escape' => 27);
@@ -287,9 +341,11 @@ throw new RuntimeException('Chrome did not open a DevTools socket on port ' . $t
 
 private function find_binary() {
 $from_env = getenv('TAGUI_CHROME_BIN');
-if (is_string($from_env) && $from_env !== '' && is_file($from_env)) return $from_env;
+if (is_string($from_env) && $from_env !== '' && is_file($from_env)) return tagui_unwrap_chromium($from_env);
 $candidates = array(
-'google-chrome-stable', '/opt/google/chrome/chrome', 'chromium', 'chromium-browser',
+'google-chrome-stable', '/opt/google/chrome/chrome',
+'/usr/lib/chromium/chromium', '/usr/lib/chromium-browser/chromium-browser',
+'chromium', 'chromium-browser',
 'microsoft-edge-stable', 'microsoft-edge', 'google-chrome',
 // App-bundle paths are the same on Apple Silicon and Intel macOS.
 '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -311,10 +367,10 @@ $candidates[] = $local . '\\Microsoft\\Edge\\Application\\msedge.exe';}}
 foreach ($candidates as $candidate) {
 if ($candidate === '') continue;
 if (str_contains($candidate, DIRECTORY_SEPARATOR) || str_contains($candidate, '/')) {
-if (is_file($candidate)) return $candidate;
+if (is_file($candidate)) return tagui_unwrap_chromium($candidate);
 continue;}
 $found = $this->which($candidate);
-if ($found !== '') return $found;}
+if ($found !== '') return tagui_unwrap_chromium($found);}
 return '';}
 
 function push_frame($name) {
@@ -616,6 +672,7 @@ function __construct($chrome, $quiet, $flow_path) {
 $this->chrome = $chrome; $this->quiet = $quiet; $this->flow_path = $flow_path;
 $this->vars['infinity'] = 1024;
 for ($i = 1; $i <= 16; $i++) {
+$this->vars['p' . $i] = '';
 $env = getenv('TAGUI_PARAM_' . $i);
 if ($env !== false && $env !== '') $this->vars['p' . $i] = $env;}}
 
@@ -628,7 +685,7 @@ $index++;}}
 
 function run_lines($lines) {
 $this->started_at = microtime(true);
-if (!$this->quiet) $this->emit_raw("\nSTART - automation started - " . date('D M j Y H:i:s'));
+if (!$this->quiet) $this->emit_raw("\nSTART - automation started - " . tagui_local_stamp());
 $this->execute_range($lines, 0, count($lines) - 1, true);
 if (!$this->quiet) {
 $url = 'about:blank'; $title = '';
@@ -647,6 +704,11 @@ if ($trimmed === '' || str_starts_with($trimmed, '//')) {$i++; continue;}
 $i = $this->execute_statement($lines, $i, $end, $active);}}
 
 function execute_statement($lines, $i, $end, $active) {
+$block = $this->language_block($lines, $i, $end);
+if ($block !== null) {
+if ($block['error'] !== '') {if ($active) $this->fail($i, $block['error']); return $block['next'];}
+if ($active) $this->run_language($block['kind'], $block['body'], $i);
+return $block['next'];}
 $raw = trim($lines[$i]);
 $lower = strtolower($raw);
 if ($lower === '{') {
@@ -761,10 +823,14 @@ if ($intent === 'api') {$this->trace($line); $this->api_step($line, $index); ret
 if ($intent === 'run') {$this->run_step($line, $index); return;}
 if ($intent === 'check') {$this->check_step($line, $index); return;}
 if ($intent === 'keyboard' || $intent === 'mouse' || $intent === 'vision') {$this->visual_gap($index, $line); return;}
-if ($intent === 'js' || $intent === 'py' || $intent === 'r' || $intent === 'test') {$this->integration_gap($intent, $index); return;}
+if ($intent === 'js') {$this->js_step($line, $index); return;}
+if ($intent === 'py') {$this->py_step($line, $index); return;}
+if ($intent === 'r') {$this->r_step($line, $index); return;}
+if ($intent === 'test') {$this->integration_gap($intent, $index); return;}
 if ($intent === 'frame' || $intent === 'popup') {
 $this->fail($index, $intent . ' is not supported in live mode. It opens a block around the following steps; put it in a flow file.'); return;}
 if ($this->is_assignment($line)) {$this->assign_step($line, $index); return;}
+if (tagui_is_code($line)) {$this->js_run($line, $index); return;}
 $this->fail($index, 'cannot understand step ' . $line);}
 
 function live_loop() {
@@ -784,7 +850,7 @@ $this->live = false;}
 
 function go($url, $index) {
 if (!$this->require_chrome($index)) return;
-try {$this->chrome->navigate($url);}
+try {$this->chrome->navigate(tagui_file_url($url));}
 catch (Exception $e) {$this->fail($index, $e->getMessage());}}
 
 function pointer($line, $button, $clicks, $index) {
@@ -818,7 +884,7 @@ $split = stripos($params, ' to ');
 if ($split === false) {$this->fail($index, 'target/variable missing for ' . $line); return;}
 $target = trim(substr($params, 0, $split));
 $name = trim(substr($params, $split + 4));
-if (tagui_is_visual($target)) {$this->visual_gap($index, $line); return;}
+if (tagui_is_visual($target)) {$this->visual_gap($index, $line, false); return;}
 if ($target === '' || $name === '' || !preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $name)) {
 $this->fail($index, 'target/variable missing for ' . $line); return;}
 if (strcasecmp($target, 'page') === 0) {
@@ -843,7 +909,7 @@ if ($params === '') {$this->fail($index, 'text missing for ' . $line); return;}
 if (str_contains($params, "'") && str_contains($params, '"')) {
 $this->fail($index, 'inconsistent quotes in ' . $params); return;}
 $expr = $this->add_concat($params);
-try {$value = $this->expr($expr);}
+try {$value = $this->expr_value($expr);}
 catch (TaguiExprError $e) {$this->fail($index, $e->getMessage()); return;}
 $this->emit($this->stringish($value));}
 
@@ -858,13 +924,14 @@ else {
 $target = trim(substr($params, 0, $split));
 $file = trim(substr($params, $split + 4));
 if ($file === '') $file = $this->next_snap(); else $file = $this->abs_file($file);}
+if (strcasecmp($target, 'page') !== 0 && tagui_is_visual($target)) {$this->visual_gap($index, $line, false); return;}
 if (!$this->require_chrome($index)) return;
 $clip = null;
 if (strcasecmp($target, 'page') !== 0) {
 $info = $this->need($target, $index); if ($info === null) return;
 if ((float)$info['width'] > 0 && (float)$info['height'] > 0) {
 $clip = array('x' => (float)$info['left'], 'y' => (float)$info['top'],
-'width' => (float)$info['width'], 'height' => (float)$info['height'], 'scale' => 1);}}
+'width' => (float)$info['width'], 'height' => (float)$info['height']);}}
 try {if (!$this->chrome->screenshot($file, $clip)) $this->fail($index, 'cannot save snapshot ' . $file);}
 catch (Exception $e) {$this->fail($index, $e->getMessage());}}
 
@@ -884,7 +951,7 @@ if ($params === '' || $split === false) {$this->fail($index, 'variable missing f
 $expr = trim(substr($params, 0, $split));
 $file = $this->abs_file(trim(substr($params, $split + 4)));
 if ($expr === '' || $file === '') {$this->fail($index, 'variable missing for ' . $line); return;}
-try {$value = $this->expr($expr);}
+try {$value = $this->expr_value($expr);}
 catch (TaguiExprError $e) {$this->fail($index, $e->getMessage()); return;}
 file_put_contents($file, $this->stringish($value));}
 
@@ -902,6 +969,107 @@ if (str_starts_with($params, 'return ')) $params = trim(substr($params, 7));
 try {$this->vars['dom_result'] = $this->chrome->evaluate($params);}
 catch (Exception $e) {$this->fail($index, $e->getMessage());}}
 
+function language_block($lines, $i, $end) {
+$header = strtolower(trim($lines[$i]));
+if (!preg_match('/^(js|py|r|vision)\s+begin$/', $header, $match)) return null;
+$kind = $match[1];
+$body = array();
+$finish = $kind . ' finish';
+for ($j = $i + 1; $j <= $end; $j++) {
+if (strtolower(trim($lines[$j])) === $finish) return array('kind' => $kind, 'body' => implode("\n", $body), 'next' => $j + 1, 'error' => '');
+$body[] = rtrim((string)$lines[$j], "\r");}
+return array('kind' => $kind, 'body' => '', 'next' => $end + 1, 'error' => 'missing ' . $finish);}
+
+function run_language($kind, $body, $index) {
+$body = tagui_dedent($body);
+if ($kind === 'js') $this->js_run($body, $index);
+else if ($kind === 'py') $this->py_run($body, $index);
+else if ($kind === 'r') $this->r_run($body, $index);
+else if ($kind === 'vision') $this->visual_gap($index, 'vision ' . $body);
+else $this->fail($index, 'cannot run ' . $kind);}
+
+function js_step($line, $index) {
+$params = trim(substr($line, 3));
+$lower = strtolower($params);
+if ($params === '') {$this->fail($index, 'statement missing for ' . $line); return;}
+if ($lower === 'begin' || $lower === 'finish') {
+$this->fail($index, 'js begin / js finish is a block. Put it in a flow file.'); return;}
+$this->trace($line);
+$this->js_run($params, $index);}
+
+function py_step($line, $index) {
+$params = trim(substr($line, 3));
+$lower = strtolower($params);
+if ($params === '') {$this->fail($index, 'Python command(s) missing for ' . $line); return;}
+if ($lower === 'begin' || $lower === 'finish') {
+$this->fail($index, 'py begin / py finish is a block. Put it in a flow file.'); return;}
+$this->trace($line);
+$this->py_run($params, $index);}
+
+function r_step($line, $index) {
+$params = trim(substr($line, 2));
+if (str_starts_with(strtolower($line), 'r ')) $params = trim(substr($line, 2));
+$lower = strtolower($params);
+if ($params === '') {$this->fail($index, 'R command(s) missing for ' . $line); return;}
+if ($lower === 'begin' || $lower === 'finish') {
+$this->fail($index, 'r begin / r finish is a block. Put it in a flow file.'); return;}
+$this->trace($line);
+$this->r_run($params, $index);}
+
+function js_run($code, $index) {
+if (!$this->js_runner_available()) {$this->fail($index, 'browser is not open'); return;}
+try {$this->run_javascript($code);}
+catch (Exception $e) {$this->fail($index, $e->getMessage());}}
+
+function py_run($code, $index) {
+try {$result = TaguiHelpers::python($code, $this->timeout);}
+catch (Exception $e) {$this->fail($index, $e->getMessage()); return;}
+$out = isset($result['out']) ? trim((string)$result['out']) : '';
+if (empty($result['ok'])) {
+$err = isset($result['err']) && $result['err'] !== '' ? $result['err'] : 'py step failed';
+$out = 'ERROR - ' . $err;}
+$this->remember_external('py', $out);}
+
+function r_run($code, $index) {
+try {$out = trim(TaguiHelpers::r($code, $this->timeout));}
+catch (Exception $e) {$this->fail($index, $e->getMessage()); return;}
+$out = str_replace("\\n", "\n", $out);
+$this->remember_external('r', trim($out));}
+
+function remember_external($kind, $out) {
+$this->vars[$kind . '_result'] = $out;
+$decoded = json_decode($out, true);
+$this->vars[$kind . '_json'] = ($out !== '' && json_last_error() === JSON_ERROR_NONE) ? $decoded : null;}
+
+function js_runner_available() {
+if ($this->chrome !== null && method_exists($this->chrome, 'evaluate')) return true;
+return tagui_which('node') !== '';}
+
+function js_fallback_error($error) {
+$message = $error->getMessage();
+return str_contains($message, 'unexpected') || str_contains($message, 'unknown method')
+|| str_contains($message, 'cannot understand expression') || str_contains($message, 'expected ');}
+
+function expr_value($source) {
+try {return $this->expr($source);}
+catch (TaguiExprError $e) {
+if (!$this->js_fallback_error($e) || !$this->js_runner_available()) throw $e;
+try {return $this->run_javascript('return (' . $source . ');');}
+catch (Exception $ex) {throw new TaguiExprError($ex->getMessage());}}}
+
+function run_javascript($code) {
+$script = tagui_js_program($code, $this->vars);
+if ($this->chrome !== null && method_exists($this->chrome, 'evaluate')) $result = $this->chrome->evaluate($script);
+else $result = tagui_js_eval_node($script);
+if (!is_array($result)) throw new RuntimeException('page script failed');
+if (!empty($result['error'])) throw new RuntimeException('page script failed: ' . $result['error']);
+if (isset($result['vars']) && is_array($result['vars'])) {
+foreach ($result['vars'] as $key => $value) {
+if (!is_string($key) || !preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $key)) continue;
+if (!array_key_exists($key, $this->vars) && $value === null) continue;
+$this->vars[$key] = $value;}}
+return array_key_exists('value', $result) ? $result['value'] : null;}
+
 function assign_step($line, $index) {
 if (str_starts_with($line, 'var ')) $line = trim(substr($line, 4));
 $eq = strpos($line, '=');
@@ -909,7 +1077,7 @@ $name = trim(substr($line, 0, $eq));
 $expr = trim(substr($line, $eq + 1));
 if (str_ends_with($expr, ';')) $expr = trim(substr($expr, 0, -1));
 if (!preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $name)) {$this->fail($index, 'cannot understand step ' . $line); return;}
-try {$this->vars[$name] = $this->expr($expr);}
+try {$this->vars[$name] = $this->expr_value($expr);}
 catch (TaguiExprError $e) {$this->fail($index, $e->getMessage());}}
 
 function calls() {
@@ -942,7 +1110,7 @@ $parser = new TaguiExpr($this->vars, $this->calls());
 return $parser->evaluate($source);}
 
 function truthy_expr($source, $index) {
-try {$parser = new TaguiExpr($this->vars, $this->calls()); return $parser->truthy($parser->evaluate($source));}
+try {$parser = new TaguiExpr($this->vars, $this->calls()); return $parser->truthy($this->expr_value($source));}
 catch (TaguiExprError $e) {$this->fail($index, $e->getMessage()); return false;}}
 
 function condition_expression($line) {
@@ -1018,7 +1186,7 @@ $expanded = preg_replace_callback('/`([^`]*)`/', function ($match) use ($engine,
 $inner = $match[1];
 if ($inner === '') return $keep ? "''" : '';
 if ($keep) return "''+(" . $inner . ")+''";
-return $engine->stringish($engine->expr($inner));}, $line);
+return $engine->stringish($engine->expr_value($inner));}, $line);
 return $expanded === null ? $line : $expanded;}
 
 function backtick_expression_line($line) {
@@ -1118,6 +1286,7 @@ catch (Exception $e) {tagui_write_output('ERROR - ' . $e->getMessage() . "\n"); 
 $chrome_started = false;
 pcntl_async_signals(true);
 $stop = function () use ($chrome, &$chrome_started) {
+TaguiHelpers::shutdown();
 if ($chrome_started) {$chrome->stop(); $chrome_started = false;}};
 pcntl_signal(SIGTERM, function () use ($stop) {$stop(); exit(0);});
 pcntl_signal(SIGINT, function () use ($stop) {$stop(); exit(130);});
@@ -1128,19 +1297,22 @@ $chrome->timeout = $engine->timeout;
 $chrome_started = true;
 $lines = file($flow, FILE_IGNORE_NEW_LINES);
 if ($lines === false) $lines = array();
+$lines = tagui_translate_lines($lines, tagui_active_language(__DIR__));
 $speed = getenv('tagui_speed_mode') === 'true';
+$failed = false;
 foreach ($datasets as $index => $repo) {
 if ($index > 0 && !$speed) sleep(3);
 $engine->repo = $repo;
 $engine->stopped = false;
 $engine->jump = null;
-$engine->run_lines($lines);}}
+$engine->run_lines($lines);
+if ($engine->stopped) $failed = true;}}
 catch (Exception $e) {
 tagui_write_output('ERROR - ' . $e->getMessage() . "\n");
 $stop();
 return 1;}
 $stop();
-return 0;}
+return $failed ? 1 : 0;}
 
 if (PHP_SAPI === 'cli' && isset($argv[0]) && realpath($argv[0]) === realpath(__FILE__)) {
 exit(tagui_modern_main($argv));}
