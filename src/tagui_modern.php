@@ -60,8 +60,10 @@ $event['unmodifiedText'] = $text;}
 return $event;}
 
 function tagui_named_key($token) {
+// Fourth field is keyDown text and unmodifiedText. Puppeteer's USKeyboardLayout
+// sets text only on Enter ('\r') and Space (' '). The other named keys have none.
 $table = array(
-'enter' => array('Enter', 'Enter', 13, null),
+'enter' => array('Enter', 'Enter', 13, "\r"),
 'tab' => array('Tab', 'Tab', 9, null),
 'esc' => array('Escape', 'Escape', 27, null),
 'escape' => array('Escape', 'Escape', 27, null),
@@ -159,6 +161,9 @@ private $next_id = 0;
 private $log_path = '';
 private $frame_stack = array();
 private $popup_stack = array();
+private $released_targets = array();
+private $expect_spawn = false;
+private $following = false;
 
 function __construct() {}
 
@@ -265,6 +270,7 @@ $this->profile = '';
 $this->persistent_profile = false;}
 
 function navigate($url) {
+$this->follow_newest_page();
 $this->command('Page.navigate', array('url' => $url));
 $deadline = microtime(true) + max($this->timeout, 20);
 $last = '';
@@ -283,6 +289,7 @@ throw new RuntimeException('navigation timed out for ' . $url);}
 return $last;}
 
 function evaluate($expression) {
+$this->follow_newest_page();
 $result = $this->command('Runtime.evaluate', array(
 'expression' => $expression,
 'returnByValue' => true));
@@ -334,13 +341,14 @@ usleep(200000);
 } while (microtime(true) < $deadline);
 return null;}
 
-function click_at($x, $y, $button, $clicks) {
+function click_at($x, $y, $button, $clicks, $may_open = false) {
 $this->command('Input.dispatchMouseEvent', array(
 'type' => 'mouseMoved', 'x' => $x, 'y' => $y, 'button' => 'none', 'clickCount' => 0));
 $this->command('Input.dispatchMouseEvent', array(
 'type' => 'mousePressed', 'x' => $x, 'y' => $y, 'button' => $button, 'clickCount' => $clicks));
 $this->command('Input.dispatchMouseEvent', array(
-'type' => 'mouseReleased', 'x' => $x, 'y' => $y, 'button' => $button, 'clickCount' => $clicks));}
+'type' => 'mouseReleased', 'x' => $x, 'y' => $y, 'button' => $button, 'clickCount' => $clicks));
+if ($may_open) $this->expect_spawn = true;}
 
 function hover_at($x, $y) {
 $this->command('Input.dispatchMouseEvent', array(
@@ -368,6 +376,7 @@ if ($scale > 4) $scale = 4.0;
 return $scale;}
 
 function screenshot($path, $clip) {
+$this->follow_newest_page();
 $params = array('format' => 'png', 'fromSurface' => true);
 if ($clip === null) $clip = $this->viewport_clip();
 if (is_array($clip)) {
@@ -529,6 +538,8 @@ try {$this->command('Page.bringToFront', new stdClass());} catch (Exception $e) 
 return true;}
 
 function pop_popup() {
+$left = $this->page_target_id();
+if ($left !== '') $this->released_targets[$left] = true;
 $saved = array_pop($this->popup_stack);
 if (!is_array($saved)) return;
 try {if ($this->client !== null) $this->client->close();} catch (Exception $e) {}
@@ -570,6 +581,80 @@ if (stripos($url, $keyword) === false) continue;
 if (strcasecmp($type, 'Document') === 0) return $url;
 if ($fallback === '') $fallback = $url;}
 return $fallback;}
+
+function follow_newest_page() {
+if (getenv('TAGUI_MODERN_FOLLOW_TABS') !== '1') return;
+if ($this->following || $this->client === null) return;
+$this->following = true;
+try {
+$current = $this->page_target_id();
+$deadline = microtime(true) + ($this->expect_spawn ? 1.0 : 0);
+$quiet = 0;
+while (true) {
+$leaf = $this->newest_spawn_id($this->target_infos(), $current);
+if ($leaf !== '') {
+$this->expect_spawn = false;
+$ws = $this->page_socket($leaf);
+if ($ws !== '' && $ws !== $this->ws_url) $this->switch_page($ws);
+return;}
+if (!$this->expect_spawn || microtime(true) >= $deadline || $quiet >= 2) {
+$this->expect_spawn = false;
+return;}
+$quiet++;
+usleep(150000);}}
+finally {$this->following = false;}}
+
+private function newest_spawn_id($infos, $current) {
+$children = array();
+foreach ($infos as $info) {
+if (!is_array($info) || !isset($info['type']) || $info['type'] !== 'page') continue;
+$id = isset($info['targetId']) ? (string)$info['targetId'] : '';
+if ($id === '' || isset($this->released_targets[$id])) continue;
+$url = isset($info['url']) ? (string)$info['url'] : '';
+if (str_starts_with($url, 'chrome://') || str_starts_with($url, 'devtools://') || str_starts_with($url, 'chrome-extension://')) continue;
+$opener = isset($info['openerId']) ? (string)$info['openerId'] : '';
+if ($opener === '') continue;
+if (!isset($children[$opener])) $children[$opener] = array();
+$children[$opener][] = $id;}
+$cursor = $current;
+$guard = 0;
+while ($guard < 20 && isset($children[$cursor])) {
+$cursor = $children[$cursor][count($children[$cursor]) - 1];
+$guard++;}
+if ($cursor === $current) return '';
+return $cursor;}
+
+private function target_infos() {
+try {$result = $this->command('Target.getTargets', new stdClass());}
+catch (Exception $e) {return array();}
+if (!is_array($result) || !isset($result['targetInfos']) || !is_array($result['targetInfos'])) return array();
+return $result['targetInfos'];}
+
+private function page_target_id() {
+if (preg_match('#/([^/]+)$#', (string)$this->ws_url, $match)) return $match[1];
+return '';}
+
+private function page_socket($id) {
+foreach ($this->list_pages() as $target) {
+if (isset($target['id']) && (string)$target['id'] === $id && !empty($target['webSocketDebuggerUrl'])) {
+return (string)$target['webSocketDebuggerUrl'];}}
+return '';}
+
+private function switch_page($ws) {
+$old = $this->client;
+$this->ws_url = $ws;
+$this->frame_dx = 0;
+$this->frame_dy = 0;
+$this->frame_stack = array();
+$this->client = new WebSocket\Client($ws, array('timeout' => 30, 'fragment_size' => 65536));
+$this->command('Page.enable', new stdClass());
+$this->command('Runtime.enable', new stdClass());
+try {$this->command('Network.enable', new stdClass());} catch (Exception $e) {}
+try {$this->command('Page.bringToFront', new stdClass());} catch (Exception $e) {}
+$stacked = false;
+foreach ($this->popup_stack as $saved) {
+if (is_array($saved) && isset($saved['client']) && $saved['client'] === $old) {$stacked = true; break;}}
+if (!$stacked && $old !== null) {try {$old->close();} catch (Exception $e) {}}}
 
 private function find_popup($keyword) {
 $list = $this->list_pages();
@@ -1047,7 +1132,7 @@ function pointer($line, $button, $clicks, $index) {
 $target = trim(substr($line, strpos($line, ' ') + 1));
 if ($target === '' || strcasecmp($target, 'click') === 0) {$this->fail($index, 'target missing for ' . $line); return;}
 $info = $this->need($target, $index); if ($info === null) return;
-try {$this->chrome->click_at((float)$info['x'], (float)$info['y'], $button, $clicks);}
+try {$this->chrome->click_at((float)$info['x'], (float)$info['y'], $button, $clicks, true);}
 catch (Exception $e) {$this->fail($index, $e->getMessage());}}
 
 function hover($line, $index) {
@@ -1119,6 +1204,7 @@ else {
 $target = trim(substr($params, 0, $split));
 $file = trim(substr($params, $split + 4));
 if ($file === '') $file = $this->next_snap(); else $file = $this->abs_file($file);}
+if ($this->is_desktop_snap($target)) {$this->visual_gap($index, 'snap ' . $target . ' to ' . $file, false); return;}
 if (!$this->is_page_snap($target) && tagui_is_visual($target)) {$this->visual_gap($index, $line, false); return;}
 if (!$this->require_chrome($index)) return;
 $clip = null;
@@ -1334,19 +1420,23 @@ return array(
 'url' => function ($args) use ($engine) {return $engine->chrome ? $engine->chrome->url() : 'about:blank';},
 'text' => function ($args) use ($engine) {return $engine->chrome ? $engine->chrome->body_text() : '';},
 'exist' => function ($args) use ($engine) {return $engine->exists_arg($args);},
-'present' => function ($args) use ($engine) {return $engine->exists_arg($args);},
+'present' => function ($args) use ($engine) {return $engine->present_arg($args);},
 'visible' => function ($args) use ($engine) {return $engine->visible_arg($args);},
 'count' => function ($args) use ($engine) {return $engine->count_arg($args);});}
 
-function exists_arg($args) {return $this->presence_arg($args, 'present');}
-function visible_arg($args) {return $this->presence_arg($args, 'visible');}
+function exists_arg($args) {return $this->presence_arg($args, 'present', true);}
+function present_arg($args) {return $this->presence_arg($args, 'present', false);}
+function visible_arg($args) {return $this->presence_arg($args, 'visible', false);}
 function image_present($command) {
 return TaguiSikuli::run($command, max(30.0, (float)$this->timeout));}
-function presence_arg($args, $intent) {
+function presence_arg($args, $intent, $wait = false) {
 if (!isset($args[0])) return false;
 $target = trim((string)$args[0]);
 if ($target !== '' && tagui_is_visual($target)) {
 $command = $intent . ' ' . $this->visual_target($target);
+if (!$wait) {
+try {return (bool)$this->image_present($command);}
+catch (Exception $e) {throw new TaguiExprError($e->getMessage());}}
 $deadline = microtime(true) + (float)$this->timeout;
 while (true) {
 try {$found = $this->image_present($command);}
@@ -1498,8 +1588,11 @@ try {$this->chrome->screenshot($this->next_snap(), null);} catch (Exception $e) 
 if (!$this->live) $this->stopped = true;}
 
 function is_page_snap($target) {
-$name = strtolower(trim((string)$target));
-return $name === 'page' || $name === 'page.png';}
+return strcasecmp(trim((string)$target), 'page') === 0;}
+
+function is_desktop_snap($target) {
+$name = strtolower(str_replace('\\', '/', trim((string)$target)));
+return str_ends_with($name, 'page.png') || str_ends_with($name, 'page.bmp');}
 
 function redacted_trace($line) {
 if (tagui_keyword_intent($line) !== 'type') return $line;

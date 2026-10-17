@@ -411,17 +411,35 @@ $typed_view = array();
 foreach ($typed as $event) {
 $key = $event['key'] === ' ' ? 'Space' : $event['key'];
 $text = '';
-if (isset($event['text'])) $text = '=' . ($event['text'] === ' ' ? 'Space' : $event['text']);
+if (isset($event['text'])) {
+$shown = $event['text'];
+if ($shown === ' ') $shown = 'Space';
+else if ($shown === "\r") $shown = '\\r';
+$text = '=' . $shown;}
 $typed_view[] = $event['type'] . ' ' . $key . $text;}
 expect('key events', $typed_view, array(
 'keyDown a=a', 'keyUp a',
-'keyDown Enter', 'keyUp Enter',
+'keyDown Enter=\\r', 'keyUp Enter',
 'keyDown Tab', 'keyUp Tab',
 'keyDown Escape', 'keyUp Escape',
 'keyDown Backspace', 'keyUp Backspace',
 'keyDown Space=Space', 'keyUp Space'));
 expect('enter code', $typed[2]['windowsVirtualKeyCode'], 13);
+expect('enter text', $typed[2]['text'], "\r");
+expect('enter unmodified', $typed[2]['unmodifiedText'], "\r");
+expect('enter keyup text', isset($typed[3]['text']), false);
 expect('backspace code', $typed[8]['windowsVirtualKeyCode'], 8);
+$named_text = array();
+foreach (array('enter', 'tab', 'esc', 'escape', 'backspace', 'bs', 'delete', 'del', 'space', 'up', 'down', 'left', 'right', 'home', 'end', 'pageup', 'pagedown', 'insert') as $name) {
+$named = tagui_named_key($name);
+$named_text[$name] = $named[3];}
+expect('named key text', $named_text, array(
+'enter' => "\r",
+'tab' => null, 'esc' => null, 'escape' => null,
+'backspace' => null, 'bs' => null, 'delete' => null, 'del' => null,
+'space' => ' ',
+'up' => null, 'down' => null, 'left' => null, 'right' => null,
+'home' => null, 'end' => null, 'pageup' => null, 'pagedown' => null, 'insert' => null));
 $cleared = tagui_type_events('x', true);
 $clear_keys = array();
 foreach ($cleared as $event) {
@@ -436,7 +454,7 @@ public $clicks = array();
 function evaluate($expression) {
 $this->commands[] = array('evaluate', $expression);
 return array('x' => 8.0, 'y' => 9.0);}
-function click_at($x, $y, $button, $clicks) {$this->clicks[] = array($x, $y, $button, $clicks);}
+function click_at($x, $y, $button, $clicks, $may_open = false) {$this->clicks[] = array($x, $y, $button, $clicks);}
 function command($method, $params) {
 $this->commands[] = array($method, $params);
 return array();}}
@@ -453,7 +471,7 @@ foreach ($recorder->commands as $call) {
 $methods[] = $call[0];
 if ($call[0] === 'Input.dispatchKeyEvent' && $call[1]['type'] === 'keyDown' && isset($call[1]['text'])) $down_text[] = $call[1]['text'];}
 expect('no insertText', in_array('Input.insertText', $methods, true), false);
-expect('typed chars', $down_text, array('a', 'b'));
+expect('typed chars', $down_text, array('a', 'b', "\r"));
 
 $secret = new TaguiModern(null, false, '/tmp');
 $secret->capture = true;
@@ -486,8 +504,12 @@ expect('visual abs', $vis->visual_command('click visao/login.png'), 'click /flow
 expect('type image keeps text', $vis->visual_command('type visao/box.png as report.png'), 'type /flows/podio/visao/box.png as report.png');
 expect('visual coords', $vis->visual_command('click (12,34)'), 'click (12,34)');
 expect('visual kept', $vis->visual_command('rclick /abs/mark.png'), 'rclick /abs/mark.png');
-expect('page snap name', $vis->is_page_snap('page.png'), true);
-expect('nested page image', $vis->is_page_snap('visao/page.png'), false);
+expect('chrome page snap', $vis->is_page_snap('page'), true);
+expect('page.png not chrome', $vis->is_page_snap('page.png'), false);
+expect('desktop page.png', $vis->is_desktop_snap('page.png'), true);
+expect('desktop page.bmp', $vis->is_desktop_snap('page.bmp'), true);
+expect('desktop nested', $vis->is_desktop_snap('visao/page.png'), true);
+expect('page not desktop', $vis->is_desktop_snap('page'), false);
 
 class CountingSikuli extends TaguiModern {
 public $image_calls = 0;
@@ -509,13 +531,51 @@ $miss->timeout = 0.35;
 $miss_started = microtime(true);
 expect('exist timeout', $miss->exists_arg(array('visao/nope.png')), false);
 expect('exist waited', $miss->image_calls >= 2 && (microtime(true) - $miss_started) < 2, true);
+class OnceImage extends TaguiModern {
+public $image_calls = 0;
+public $image_command = '';
+function image_present($command) {
+$this->image_calls++;
+$this->image_command = $command;
+return false;}}
+$once = new OnceImage(null, true, '/flows/podio');
+$once->timeout = 30;
+$once_started = microtime(true);
+expect('present once', $once->present_arg(array('visao/licenca2.png')), false);
+expect('present calls', $once->image_calls, 1);
+expect('present fast', (microtime(true) - $once_started) < 1, true);
+expect('present command', $once->image_command, 'present /flows/podio/visao/licenca2.png');
+$seen_once = new OnceImage(null, true, '/flows/podio');
+$seen_once->timeout = 30;
+expect('visible once', $seen_once->visible_arg(array('visao/licenca2.png')), false);
+expect('visible calls', $seen_once->image_calls, 1);
+expect('visible command', $seen_once->image_command, 'visible /flows/podio/visao/licenca2.png');
+class CountingFind {
+public $calls = 0;
+public $lives = array();
+function find($locator, $live) {$this->calls++; $this->lives[] = $live; return null;}}
+$finder = new CountingFind();
+$selector = new TaguiModern($finder, true, '/tmp');
+$selector->timeout = 5;
+$selector_started = microtime(true);
+expect('selector present', $selector->present_arg(array('#login')), false);
+expect('selector visible', $selector->visible_arg(array('#gone')), false);
+expect('selector exist', $selector->exists_arg(array('#login')), false);
+expect('selector calls', $finder->calls, 3);
+expect('selector one shot', $finder->lives, array(true, true, true));
+expect('selector fast', (microtime(true) - $selector_started) < 1, true);
 
 putenv('TAGUI_SIKULI_JAR=/tmp/tagui-missing-oculix.jar');
 $page_snap = new TaguiModern(null, true, '/tmp');
 $page_snap->capture = true;
 $page_snap->execute_range(array('snap page.png to shot.png'), 0, 0, true);
-expect('page.png fullscreen', $page_snap->stopped && str_contains($page_snap->captured[0], 'browser is not open'), true);
-expect('page.png not sikuli', str_contains($page_snap->captured[0], 'OculiX'), false);
+expect('page.png sikuli', $page_snap->stopped && str_contains($page_snap->captured[0], 'OculiX'), true);
+expect('page.png not chrome', str_contains($page_snap->captured[0], 'browser is not open'), false);
+$chrome_snap = new TaguiModern(null, true, '/tmp');
+$chrome_snap->capture = true;
+$chrome_snap->execute_range(array('snap page to shot.png'), 0, 0, true);
+expect('snap page chrome', $chrome_snap->stopped && str_contains($chrome_snap->captured[0], 'browser is not open'), true);
+expect('snap page not sikuli', str_contains($chrome_snap->captured[0], 'OculiX'), false);
 
 class ReadyChrome {
 function find($locator, $live) {return array('found' => true, 'visible' => true);}}
