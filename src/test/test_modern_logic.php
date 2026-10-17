@@ -411,17 +411,35 @@ $typed_view = array();
 foreach ($typed as $event) {
 $key = $event['key'] === ' ' ? 'Space' : $event['key'];
 $text = '';
-if (isset($event['text'])) $text = '=' . ($event['text'] === ' ' ? 'Space' : $event['text']);
+if (isset($event['text'])) {
+$shown = $event['text'];
+if ($shown === ' ') $shown = 'Space';
+else if ($shown === "\r") $shown = '\\r';
+$text = '=' . $shown;}
 $typed_view[] = $event['type'] . ' ' . $key . $text;}
 expect('key events', $typed_view, array(
 'keyDown a=a', 'keyUp a',
-'keyDown Enter', 'keyUp Enter',
+'keyDown Enter=\\r', 'keyUp Enter',
 'keyDown Tab', 'keyUp Tab',
 'keyDown Escape', 'keyUp Escape',
 'keyDown Backspace', 'keyUp Backspace',
 'keyDown Space=Space', 'keyUp Space'));
 expect('enter code', $typed[2]['windowsVirtualKeyCode'], 13);
+expect('enter text', $typed[2]['text'], "\r");
+expect('enter unmodified', $typed[2]['unmodifiedText'], "\r");
+expect('enter keyup text', isset($typed[3]['text']), false);
 expect('backspace code', $typed[8]['windowsVirtualKeyCode'], 8);
+$named_text = array();
+foreach (array('enter', 'tab', 'esc', 'escape', 'backspace', 'bs', 'delete', 'del', 'space', 'up', 'down', 'left', 'right', 'home', 'end', 'pageup', 'pagedown', 'insert') as $name) {
+$named = tagui_named_key($name);
+$named_text[$name] = $named[3];}
+expect('named key text', $named_text, array(
+'enter' => "\r",
+'tab' => null, 'esc' => null, 'escape' => null,
+'backspace' => null, 'bs' => null, 'delete' => null, 'del' => null,
+'space' => ' ',
+'up' => null, 'down' => null, 'left' => null, 'right' => null,
+'home' => null, 'end' => null, 'pageup' => null, 'pagedown' => null, 'insert' => null));
 $cleared = tagui_type_events('x', true);
 $clear_keys = array();
 foreach ($cleared as $event) {
@@ -453,7 +471,7 @@ foreach ($recorder->commands as $call) {
 $methods[] = $call[0];
 if ($call[0] === 'Input.dispatchKeyEvent' && $call[1]['type'] === 'keyDown' && isset($call[1]['text'])) $down_text[] = $call[1]['text'];}
 expect('no insertText', in_array('Input.insertText', $methods, true), false);
-expect('typed chars', $down_text, array('a', 'b'));
+expect('typed chars', $down_text, array('a', 'b', "\r"));
 
 $secret = new TaguiModern(null, false, '/tmp');
 $secret->capture = true;

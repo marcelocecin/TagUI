@@ -60,8 +60,10 @@ $event['unmodifiedText'] = $text;}
 return $event;}
 
 function tagui_named_key($token) {
+// Fourth field is keyDown text and unmodifiedText. Puppeteer's USKeyboardLayout
+// sets text only on Enter ('\r') and Space (' '). The other named keys have none.
 $table = array(
-'enter' => array('Enter', 'Enter', 13, null),
+'enter' => array('Enter', 'Enter', 13, "\r"),
 'tab' => array('Tab', 'Tab', 9, null),
 'esc' => array('Escape', 'Escape', 27, null),
 'escape' => array('Escape', 'Escape', 27, null),
