@@ -19,7 +19,6 @@ if (!file_exists($script)) die("ERROR - cannot find " . $script . "\n");
 $input_file = fopen($script,'r') or die("ERROR - cannot open " . $script . "\n");
 $output_file = fopen($script . '.js','w') or die("ERROR - cannot open " . $script . '.js' . "\n");
 $config_file = fopen('tagui_config.txt','r') or die("ERROR - cannot open tagui_config.txt" . "\n");
-require_once __DIR__ . '/tagui_steps.php';
 $header_file = fopen('tagui_header.js','r') or die("ERROR - cannot open tagui_header.js" . "\n");
 $footer_file = fopen('tagui_footer.js','r') or die("ERROR - cannot open tagui_footer.js" . "\n");
 
@@ -72,7 +71,6 @@ $inside_vision_block = 0; $inside_js_block = 0; $inside_dom_block = 0;
 fwrite($output_file,"/* OUTPUT CASPERJS SCRIPT FOR TAGUI FRAMEWORK ~ TEBEL.ORG */\n\n");
 fwrite($output_file,"var casper = require('casper').create();\n"); // opening lines
 while(!feof($config_file)) {fwrite($output_file,fgets($config_file));} fclose($config_file);
-fwrite($output_file, tagui_steps_javascript());
 while(!feof($header_file)) {fwrite($output_file,fgets($header_file));} fclose($header_file);
 
 // append global functions file created by user if the file exists
@@ -417,27 +415,115 @@ case "timeout": return timeout_intent($script_line); break;
 case "code": return code_intent($script_line); break;
 default: echo "ERROR - " . current_line() . " cannot understand step " . $script_line . "\n";}}
 
-function get_intent($raw_intent) {$lc_raw_intent = strtolower($raw_intent);
-// finish commands are not block bodies, so return before the integration-block check
+function get_intent($raw_intent) {$lc_raw_intent = strtolower($raw_intent); 
+//check for a finish command and return, so we don't accidentally count it as a block intent
 if ($lc_raw_intent == "py finish") return "py"; if ($lc_raw_intent == "r finish") return "r";
 if ($lc_raw_intent == "vision finish") return "vision"; if ($lc_raw_intent == "js finish") return "js";
 if ($lc_raw_intent == "dom finish") return "dom";
 
-if ($GLOBALS['inside_py_block'] != 0 || $GLOBALS['inside_r_block'] != 0 ||
-$GLOBALS['inside_vision_block'] != 0 || $GLOBALS['inside_js_block'] != 0 ||
+if ($GLOBALS['inside_py_block'] != 0 || $GLOBALS['inside_r_block'] != 0 || 
+$GLOBALS['inside_vision_block'] != 0 || $GLOBALS['inside_js_block'] != 0 || 
 $GLOBALS['inside_dom_block'] != 0) return "integration_block";
 if ($GLOBALS['inside_run_block'] != 0) return "run";
 
-// keyword aliases live in tagui_steps.php so the Casper parser and the modern engine agree
-$shared = tagui_keyword_intent($raw_intent);
-if ($shared !== '') {if ($shared === 'check') $GLOBALS['test_automation']++; return $shared;}
+if ((substr($lc_raw_intent,0,7)=="http://") or (substr($lc_raw_intent,0,8)=="https://") or (substr($lc_raw_intent,0,11)=="about:blank")) return "url"; // recognizing about:blank as valid URL as it is part of HTML5 standard
+
+// first set of conditions check for valid keywords with their parameters
+if ((substr($lc_raw_intent,0,4)=="tap ") or (substr($lc_raw_intent,0,6)=="click ")) return "tap";
+if ((substr($lc_raw_intent,0,5)=="rtap ") or (substr($lc_raw_intent,0,7)=="rclick ")) return "rtap";
+if ((substr($lc_raw_intent,0,5)=="dtap ") or (substr($lc_raw_intent,0,7)=="dclick ")) return "dtap";
+if ((substr($lc_raw_intent,0,6)=="hover ")or(substr($lc_raw_intent,0,5)=="move ")) return "hover";
+if ((substr($lc_raw_intent,0,5)=="type ") or (substr($lc_raw_intent,0,6)=="enter ")) return "type";
+if ((substr($lc_raw_intent,0,7)=="select ") or (substr($lc_raw_intent,0,7)=="choose ")) return "select";
+if ((substr($lc_raw_intent,0,5)=="read ") or (substr($lc_raw_intent,0,6)=="fetch ")) return "read";
+if ((substr($lc_raw_intent,0,5)=="show ") or (substr($lc_raw_intent,0,6)=="print ")) return "show";
+if ((substr($lc_raw_intent,0,3)=="up ") or (substr($lc_raw_intent,0,7)=="upload ")) return "upload";
+if ((substr($lc_raw_intent,0,5)=="down ") or (substr($lc_raw_intent,0,9)=="download ")) return "down";
+if (substr($lc_raw_intent,0,8)=="receive ") return "receive";
+if (substr($lc_raw_intent,0,5)=="echo ") return "echo";
+if (substr($lc_raw_intent,0,5)=="save ") return "save";
+if (substr($lc_raw_intent,0,5)=="dump ") return "dump";
+if (substr($lc_raw_intent,0,6)=="write ") return "write";
+if (substr($lc_raw_intent,0,5)=="load ") return "load";
+if (substr($lc_raw_intent,0,5)=="snap ") return "snap";
+if (substr($lc_raw_intent,0,6)=="table ") return "table";
+if (substr($lc_raw_intent,0,5)=="wait ") return "wait";
+if (substr($lc_raw_intent,0,5)=="live ") return "live";
+if (substr($lc_raw_intent,0,4)=="ask ") return "ask";
+if (substr($lc_raw_intent,0,9)=="keyboard ") return "keyboard";
+if (substr($lc_raw_intent,0,6)=="mouse ") return "mouse";
+if (substr($lc_raw_intent,0,6)=="check ") {$GLOBALS['test_automation']++; return "check";}
+if (substr($lc_raw_intent,0,5)=="test ") return "test";
+if (substr($lc_raw_intent,0,6)=="frame ") return "frame";
+if (substr($lc_raw_intent,0,6)=="popup ") return "popup";
+if (substr($lc_raw_intent,0,4)=="api ") return "api";
+if (substr($lc_raw_intent,0,4)=="run ") return "run";
+if (substr($lc_raw_intent,0,4)=="dom ") return "dom";
+if (substr($lc_raw_intent,0,3)=="js ") return "js";
+if (substr($lc_raw_intent,0,2)=="r ") return "r";
+if (substr($lc_raw_intent,0,3)=="py ") return "py";
+if (substr($lc_raw_intent,0,7)=="vision ") return "vision";
+if (substr($lc_raw_intent,0,8)=="timeout ") return "timeout";
+
+// second set of conditions check for valid keywords with missing parameters
+if (($lc_raw_intent=="tap") or ($lc_raw_intent=="click")) return "tap";
+if (($lc_raw_intent=="rtap") or ($lc_raw_intent=="rclick")) return "rtap";
+if (($lc_raw_intent=="dtap") or ($lc_raw_intent=="dclick")) return "dtap";
+if (($lc_raw_intent=="hover") or ($lc_raw_intent=="move")) return "hover";
+if (($lc_raw_intent=="type") or ($lc_raw_intent=="enter")) return "type";
+if (($lc_raw_intent=="select") or ($lc_raw_intent=="choose")) return "select";
+if (($lc_raw_intent=="read") or ($lc_raw_intent=="fetch")) return "read";
+if (($lc_raw_intent=="show") or ($lc_raw_intent=="print")) return "show";
+if (($lc_raw_intent=="up") or ($lc_raw_intent=="upload")) return "upload";
+if (($lc_raw_intent=="down") or ($lc_raw_intent=="download")) return "down";
+if ($lc_raw_intent=="receive") return "receive";
+if ($lc_raw_intent=="echo") return "echo";
+if ($lc_raw_intent=="save") return "save";
+if ($lc_raw_intent=="dump") return "dump";
+if ($lc_raw_intent=="write") return "write";
+if ($lc_raw_intent=="load") return "load";
+if ($lc_raw_intent=="snap") return "snap";
+if ($lc_raw_intent=="table") return "table";
+if ($lc_raw_intent=="wait") return "wait";
+if ($lc_raw_intent=="live") return "live";
+if ($lc_raw_intent=="ask") return "ask";
+if ($lc_raw_intent=="keyboard") return "keyboard";
+if ($lc_raw_intent=="mouse") return "mouse";
+if ($lc_raw_intent=="check") {$GLOBALS['test_automation']++; return "check";}
+if ($lc_raw_intent=="test") return "test";
+if ($lc_raw_intent=="frame") return "frame";
+if ($lc_raw_intent=="popup") return "popup";
+if ($lc_raw_intent=="api") return "api";
+if ($lc_raw_intent=="run") return "run";
+if ($lc_raw_intent=="dom") return "dom";
+if ($lc_raw_intent=="js") return "js";
+if ($lc_raw_intent=="r") return "r";
+if ($lc_raw_intent=="py") return "py";
+if ($lc_raw_intent=="vision") return "vision";
+if ($lc_raw_intent=="timeout") return "timeout";
+
+// final check for recognized code before returning error 
 if (is_code($raw_intent)) return "code"; else return "error";}
 
 function is_code($raw_intent) {
-// side effects stay in the parser; the predicate itself is tagui_is_code()
+// due to asynchronous waiting for element, if/for/while can work for parsing single step
+// other scenarios can be assumed to behave as unparsed javascript in casperjs context
+// to let if/for/while handle multiple steps/code use the { and } steps to define block
+if ((substr($raw_intent,0,4)=="var ") or (substr($raw_intent,0,3)=="do ")) return true;
+if ((substr($raw_intent,0,1)=="{") or (substr($raw_intent,0,1)=="}")) return true;
+if ((substr($raw_intent,-1)=="{") or (substr($raw_intent,-1)=="}")) return true;
+if ((substr($raw_intent,0,3)=="if ") or (substr($raw_intent,0,4)=="else")) return true;
+if ((substr($raw_intent,0,4)=="for ") or (substr($raw_intent,0,6)=="while ")) return true;
+if ((substr($raw_intent,0,7)=="switch ") or (substr($raw_intent,0,5)=="case ")) return true;
+if ((substr($raw_intent,0,6)=="break;") or ($raw_intent=="break")) return true;
+if ((substr($raw_intent,0,9)=="continue;") or ($raw_intent=="continue")) return true;
+if ((substr($raw_intent,0,7)=="casper.") or (substr($raw_intent,0,5)=="this.")) return true;
+if (substr($raw_intent,0,7)=="chrome.") return true; // chrome object for chrome integration
 if (substr($raw_intent,0,5)=="test.") {$GLOBALS['test_automation']++; return true;}
-if (substr($raw_intent,0,2)=="//") {$GLOBALS['real_line_number']--; return true;}
-return tagui_is_code($raw_intent);}
+if (substr($raw_intent,0,2)=="//") {$GLOBALS['real_line_number']--; return true;} 
+if (substr($raw_intent,-1)==";") return true; if (substr($raw_intent,0,9)=="function ") return true;
+// assume = is assignment statement, kinda acceptable as this is checked at the very end
+if (strpos($raw_intent,"=")!==false) return true; return false;}
 
 function abs_file($filename) { // helper function to return absolute filename
 if ($filename == "") return ""; $flow_script = $GLOBALS['script']; // get flow filename
@@ -458,8 +544,7 @@ else return " // beg_tx while loop marker\n";}
 
 function end_tx($locator) { // helper function to return ending string for handling locators
 if ($GLOBALS['inside_while_loop'] == 0)
-// snap the page before exiting so a missing element leaves a screenshot next to the flow
-return "},\nfunction timeout() {this.echo('ERROR - cannot find ".$locator."');try{casper.capture(snap_image());}catch(e){}this.exit();});}"."});".end_fi()."\n\n";
+return "},\nfunction timeout() {this.echo('ERROR - cannot find ".$locator."').exit();});}"."});".end_fi()."\n\n";
 else if ($GLOBALS['inside_code_block']==0)
 {$GLOBALS['inside_while_loop'] = 0; // reset inside_while_loop if not inside block
 $GLOBALS['for_loop_tracker'] = ""; // reset for_loop_tracker if not inside block
@@ -762,20 +847,11 @@ else return "casper.then(function() {".
 "techo('".$raw_intent."');});\ncasper.then(function() {casper.wait(" . (floatval($params)*1000) . ", function() {"."});});"."\n\n";}
 
 function live_intent($raw_intent) { // live mode to interactively test tagui steps and js code (casperjs context)
-// one casper step per line, instead of a blocking while loop. casper.wait / waitForExec
-// queued by a step then run before the next line is read, so wait and run work here.
-return "casper.then(function() {\n".
-"var sys = require('system'); sys.stdout.write('LIVE MODE - type done to quit\\n \\b');\n".
-"var tagui_live_step = function() {\n".
-"var live_input = ''; try {live_input = sys.stdin.readLine();} catch (e) {return;}\n".
-"if (live_input === null) return;\n".
-"if (live_input.indexOf('done') == 0) return;\n".
-"try {eval(tagui_parse(live_input));}\n".
-"catch (e) {this.echo('ERROR - ' + e.message.charAt(0).toLowerCase() + e.message.slice(1));}\n".
-"casper.then(tagui_live_step);\n".
-"};\n".
-"casper.then(tagui_live_step);\n".
-"});\n\n";}
+return "casper.then(function() {".
+"{var live_input = '';\nvar sys = require('system'); sys.stdout.write('LIVE MODE - type done to quit\\n \\b');\n".
+"while (true) {live_input = sys.stdin.readLine(); // evaluate input in casperjs context until done is entered\n".
+"if (live_input.indexOf('done') == 0) break; try {eval(tagui_parse(live_input));}
+catch(e) {this.echo('ERROR - ' + e.message.charAt(0).toLowerCase() + e.message.slice(1));}}}".end_fi()."});"."\n\n";}
 
 function ask_intent($raw_intent) { // ask user for input during automation and save to ask_result variable
 $raw_intent = str_replace("\'","'",$raw_intent); $raw_intent = str_replace("'","\'",$raw_intent);
