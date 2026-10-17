@@ -305,6 +305,100 @@ $parsed = DateTimeImmutable::createFromFormat('D M j Y H:i:s', $stamp, new DateT
 expect('local stamp', $parsed instanceof DateTimeImmutable && abs($parsed->getTimestamp() - $zone_now->getTimestamp()) <= 2, true);
 if ($saved_tz === false) putenv('TZ'); else putenv('TZ=' . $saved_tz);
 
+$dir = sys_get_temp_dir() . '/tagui_flow_' . getmypid();
+mkdir($dir);
+mkdir($dir . '/sub');
+file_put_contents($dir . '/child.tag', "echo n\nn = n + 1\ntagui sub/leaf.tag\n");
+file_put_contents($dir . '/sub/leaf.tag', "echo \"leaf\"\n");
+$inc = new TaguiModern(null, true, $dir);
+$inc->capture = true;
+$inc->execute_range(array('n = 4', 'tagui child.tag', 'echo n', 'tagui missing.tag', 'echo "nope"'), 0, 4, true);
+expect('include echoes', array_slice($inc->captured, 0, 3), array('4', 'leaf', '5'));
+expect('include missing', $inc->stopped, true);
+expect('include message', str_contains($inc->captured[3], 'file not found'), true);
+expect('include stopped', in_array('nope', $inc->captured, true), false);
+
+$block = new TaguiModern(null, true, '/tmp');
+$block->capture = true;
+$block->execute_range(array(
+'n = 0',
+'if n equals to 0',
+'    echo "a"',
+'    if n equals to 0',
+'        echo "b"',
+'        echo "c"',
+'    else',
+'        echo "no"',
+'    echo "d"',
+'else',
+'    echo "nope"',
+'echo "e"',
+'counti = 2',
+'for i from 0 to counti',
+'    echo i'), 0, 14, true);
+expect('indent block', $block->captured, array('a', 'b', 'c', 'd', 'e', '0', '1', '2'));
+expect('indent stopped', $block->stopped, false);
+$varfor = $block->parse_for('for i from 0 to counti');
+expect('for variable bound', $varfor, array('var' => 'i', 'from' => 0, 'to' => 'counti'));
+
+$words = new TaguiModern(null, true, '/tmp');
+$words->capture = true;
+$words->execute_range(array(
+'echo Retorno anexado no ClickUp',
+'timeout 60  // keep the session',
+'wait //*[@id="podio"]',
+'echo "after-wait"'), 0, 3, true);
+expect('echo literal', $words->captured[0], 'Retorno anexado no ClickUp');
+expect('timeout comment', $words->timeout, 60.0);
+expect('wait xpath', $words->stopped, false);
+expect('after wait', $words->captured[1], 'after-wait');
+
+$box = $dir . '/outbox';
+$dl = new TaguiModern(null, true, $dir);
+$dl->capture = true;
+$dl->execute_range(array('download to outbox'), 0, 0, true);
+expect('download dir', $dl->download_dir, $box);
+expect('download folder', is_dir($box), true);
+expect('download no url', $dl->stopped, false);
+
+$repo = new TaguiModern(null, true, '/tmp');
+$repo->capture = true;
+$repo->repo = array('usuario_erp' => base64_encode('alice'), 'create account' => 'btn-green');
+$repo->sync_repo_vars();
+$repo->execute_range(array('js user = atob(usuario_erp)', 'echo user', 'echo create_account'), 0, 2, true);
+expect('repo js', $repo->captured, array('alice', 'btn-green'));
+expect('repo stopped', $repo->stopped, false);
+expect('repo name', tagui_repo_identifier('create account'), 'create_account');
+expect('repo iteration', tagui_repo_identifier('[iteration]'), 'iteration');
+
+putenv('TAGUI_SIKULI_JAR=/tmp/tagui-missing-oculix.jar');
+$routes = array(
+'snap page.png to shot.png',
+'click (12,34)',
+'keyboard a',
+'rclick mark.png');
+foreach ($routes as $route_line) {
+$route = new TaguiModern(null, true, '/tmp');
+$route->capture = true;
+$route->execute_range(array($route_line), 0, 0, true);
+expect('sikuli route ' . $route_line, $route->stopped && str_contains($route->captured[0], 'OculiX') && !str_contains($route->captured[0], 'cannot understand'), true);}
+$seen = new TaguiModern(null, true, '/tmp');
+$seen->capture = true;
+$seen->execute_range(array('if exist("mark.png")', 'echo "seen"', 'echo "after-image"'), 0, 2, true);
+expect('exist image', $seen->stopped && str_contains($seen->captured[0], 'OculiX'), true);
+expect('exist not dom', str_contains($seen->captured[0], 'cannot find '), false);
+expect('exist skips', in_array('after-image', $seen->captured, true), false);
+$present = new TaguiModern(null, true, '/tmp');
+$present->capture = true;
+$present->execute_range(array('if present("mark.png")', 'echo "seen"'), 0, 1, true);
+expect('present image', $present->stopped && str_contains($present->captured[0], 'OculiX'), true);
+putenv('TAGUI_SIKULI_JAR');
+
+foreach (array('tagui_modern.php', 'tagui_steps.php', 'tagui_runtime.php') as $source_name) {
+$source = file_get_contents(dirname(__DIR__) . '/' . $source_name);
+expect($source_name . ' no curl', str_contains($source, 'curl_'), false);
+expect($source_name . ' no DOMDocument', str_contains($source, 'DOMDocument'), false);}
+
 if ($failures > 0) {fwrite(STDERR, "$failures failed\n"); exit(1);}
 fwrite(STDOUT, "all logic checks passed\n");
 exit(0);
