@@ -23,6 +23,7 @@ function run_engine($engine, $flow) {
 $env = getenv();
 if (!is_array($env)) $env = array();
 $env['TZ'] = 'Pacific/Auckland';
+$env['TAGUI_CHROME_ISOLATED'] = '1';
 $spec = array(
 0 => array('file', '/dev/null', 'r'),
 1 => array('pipe', 'w'),

@@ -45,6 +45,95 @@ foreach ($candidates as $candidate) {
 $real = realpath($candidate);
 if (is_string($real) && tagui_is_elf($real)) return $real;}
 return $path;}
+
+function tagui_key_event($type, $key, $code, $vk, $text = null) {
+$event = array(
+'type' => $type,
+'key' => $key,
+'code' => $code,
+'windowsVirtualKeyCode' => $vk,
+'nativeVirtualKeyCode' => $vk);
+if ($text !== null) {
+$event['text'] = $text;
+$event['unmodifiedText'] = $text;}
+return $event;}
+
+function tagui_named_key($token) {
+$table = array(
+'enter' => array('Enter', 'Enter', 13, null),
+'tab' => array('Tab', 'Tab', 9, null),
+'esc' => array('Escape', 'Escape', 27, null),
+'escape' => array('Escape', 'Escape', 27, null),
+'backspace' => array('Backspace', 'Backspace', 8, null),
+'bs' => array('Backspace', 'Backspace', 8, null),
+'delete' => array('Delete', 'Delete', 46, null),
+'del' => array('Delete', 'Delete', 46, null),
+'space' => array(' ', 'Space', 32, ' '),
+'up' => array('ArrowUp', 'ArrowUp', 38, null),
+'down' => array('ArrowDown', 'ArrowDown', 40, null),
+'left' => array('ArrowLeft', 'ArrowLeft', 37, null),
+'right' => array('ArrowRight', 'ArrowRight', 39, null),
+'home' => array('Home', 'Home', 36, null),
+'end' => array('End', 'End', 35, null),
+'pageup' => array('PageUp', 'PageUp', 33, null),
+'pagedown' => array('PageDown', 'PageDown', 34, null),
+'insert' => array('Insert', 'Insert', 45, null));
+$token = strtolower($token);
+return isset($table[$token]) ? $table[$token] : null;}
+
+function tagui_special_events($token) {
+$named = tagui_named_key($token);
+if ($named === null) return array();
+$down = tagui_key_event('keyDown', $named[0], $named[1], $named[2], $named[3]);
+$up = tagui_key_event('keyUp', $named[0], $named[1], $named[2], null);
+return array($down, $up);}
+
+function tagui_char_events($ch) {
+if ($ch === ' ') return tagui_special_events('space');
+$code = '';
+$vk = 0;
+$key = $ch;
+if (strlen($ch) === 1) {
+$ord = ord($ch);
+if ($ord >= 65 && $ord <= 90) {$code = 'Key' . $ch; $vk = $ord;}
+else if ($ord >= 97 && $ord <= 122) {$code = 'Key' . strtoupper($ch); $vk = $ord - 32;}
+else if ($ord >= 48 && $ord <= 57) {$code = 'Digit' . $ch; $vk = $ord;}}
+return array(
+tagui_key_event('keyDown', $key, $code, $vk, $ch),
+tagui_key_event('keyUp', $key, $code, $vk, null));}
+
+function tagui_clear_events() {
+$meta = defined('PHP_OS_FAMILY') && PHP_OS_FAMILY === 'Darwin';
+$mod = $meta ? array('Meta', 'MetaLeft', 91) : array('Control', 'ControlLeft', 17);
+return array(
+tagui_key_event('keyDown', $mod[0], $mod[1], $mod[2], null),
+tagui_key_event('keyDown', 'a', 'KeyA', 65, null),
+tagui_key_event('keyUp', 'a', 'KeyA', 65, null),
+tagui_key_event('keyUp', $mod[0], $mod[1], $mod[2], null),
+tagui_key_event('keyDown', 'Backspace', 'Backspace', 8, null),
+tagui_key_event('keyUp', 'Backspace', 'Backspace', 8, null));}
+
+function tagui_type_events($text, $clear = false) {
+$events = $clear ? tagui_clear_events() : array();
+$names = implode('|', array_keys(array(
+'enter' => 1, 'tab' => 1, 'space' => 1, 'esc' => 1, 'escape' => 1, 'backspace' => 1, 'bs' => 1,
+'delete' => 1, 'del' => 1, 'up' => 1, 'down' => 1, 'left' => 1, 'right' => 1,
+'home' => 1, 'end' => 1, 'pageup' => 1, 'pagedown' => 1, 'insert' => 1)));
+$parts = preg_split('/(\[(?:' . $names . ')\])/i', (string)$text, -1, PREG_SPLIT_DELIM_CAPTURE);
+if (!is_array($parts)) $parts = array((string)$text);
+foreach ($parts as $part) {
+if ($part === '') continue;
+if (preg_match('/^\[(' . $names . ')\]$/i', $part, $match)) {
+$events = array_merge($events, tagui_special_events($match[1]));
+continue;}
+$chars = preg_split('//u', $part, -1, PREG_SPLIT_NO_EMPTY);
+if (!is_array($chars)) $chars = array($part);
+foreach ($chars as $ch) {
+if ($ch === "\r") continue;
+if ($ch === "\n") {$events = array_merge($events, tagui_special_events('enter')); continue;}
+$events = array_merge($events, tagui_char_events($ch));}}
+return $events;}
+
 require_once __DIR__ . '/tagui_runtime.php';
 
 /* -------------------------------------------------------------------------- */
@@ -60,6 +149,8 @@ public $ws_url = '';
 public $frame_dx = 0;
 public $frame_dy = 0;
 public $network_urls = array();
+public $download_path = '';
+public $persistent_profile = false;
 private $process = null;
 private $client = null;
 private $next_id = 0;
@@ -69,22 +160,33 @@ private $popup_stack = array();
 
 function __construct() {}
 
-function start($headless) {
-$this->headless = $headless;
-$binary = $this->find_binary();
-if ($binary === '') {
-throw new RuntimeException('cannot find Chrome or Edge. Set TAGUI_CHROME_BIN to the browser executable');}
-$this->port = $this->free_port();
-$this->profile = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR .
+function official_profile_path() {
+return dirname(__FILE__) . DIRECTORY_SEPARATOR . 'chrome' . DIRECTORY_SEPARATOR . 'tagui_user_profile';}
+
+function launch_plan($binary, $port, $headless) {
+$env_profile = getenv('TAGUI_CHROME_PROFILE');
+$custom = is_string($env_profile) && trim($env_profile) !== '';
+$isolated = getenv('TAGUI_CHROME_ISOLATED') === '1' && !$custom;
+if ($isolated) {
+$profile = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR .
 'tagui_modern_profile_' . getmypid() . '_' . bin2hex(random_bytes(4));
-if (!mkdir($this->profile, 0700, true) && !is_dir($this->profile)) {
-throw new RuntimeException('cannot create Chrome profile ' . $this->profile);}
-$this->log_path = $this->profile . DIRECTORY_SEPARATOR . 'chrome.log';
+return array('profile' => $profile, 'persistent' => false, 'args' => $this->isolated_args($binary, $port, $profile, $headless));}
+$profile = $custom ? $env_profile : $this->official_profile_path();
 $args = array(
 $binary,
-'--remote-debugging-port=' . $this->port,
+'--remote-debugging-port=' . $port,
+'--user-data-dir=' . $profile,
+'--window-size=1366,842');
+if ($headless) {array_push($args, '--headless', '--disable-gpu');}
+$args[] = 'about:blank';
+return array('profile' => $profile, 'persistent' => true, 'args' => $args);}
+
+function isolated_args($binary, $port, $profile, $headless) {
+$args = array(
+$binary,
+'--remote-debugging-port=' . $port,
 '--remote-allow-origins=*',
-'--user-data-dir=' . $this->profile,
+'--user-data-dir=' . $profile,
 '--window-size=1366,768',
 '--no-first-run',
 '--no-default-browser-check',
@@ -107,6 +209,23 @@ if ($headless) {array_push($args, '--headless=new', '--disable-gpu');}
 if (getenv('TAGUI_CHROME_SANDBOX') !== '1') {
 array_push($args, '--no-sandbox', '--disable-dev-shm-usage');}
 $args[] = 'about:blank';
+return $args;}
+
+function start($headless) {
+$this->headless = $headless;
+$binary = $this->find_binary();
+if ($binary === '') {
+throw new RuntimeException('cannot find Chrome or Edge. Set TAGUI_CHROME_BIN to the browser executable');}
+$this->port = $this->free_port();
+$plan = $this->launch_plan($binary, $this->port, $headless);
+$this->profile = $plan['profile'];
+$this->persistent_profile = $plan['persistent'];
+if (!is_dir($this->profile) && !mkdir($this->profile, 0700, true) && !is_dir($this->profile)) {
+throw new RuntimeException('cannot create Chrome profile ' . $this->profile);}
+if ($this->persistent_profile) {
+$this->log_path = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'tagui_chrome_' . getmypid() . '.log';}
+else {$this->log_path = $this->profile . DIRECTORY_SEPARATOR . 'chrome.log';}
+$args = $plan['args'];
 $descriptor = array(
 0 => array('file', '/dev/null', 'r'),
 1 => array('file', $this->log_path, 'a'),
@@ -121,7 +240,7 @@ $this->client = new WebSocket\Client($ws, array('timeout' => 30, 'fragment_size'
 $this->command('Page.enable', new stdClass());
 $this->command('Runtime.enable', new stdClass());
 try {$this->command('Network.enable', new stdClass());} catch (Exception $e) {}
-try {$this->command('Page.setDownloadBehavior', array('behavior' => 'allow', 'downloadPath' => sys_get_temp_dir()));} catch (Exception $e) {}
+try {$this->set_download_path(sys_get_temp_dir());} catch (Exception $e) {}
 $this->command('Page.bringToFront', new stdClass());}
 
 function stop() {
@@ -136,11 +255,12 @@ else {proc_terminate($this->process);}
 }
 proc_close($this->process);
 $this->process = null;}
-if ($this->profile !== '' && $this->profile !== '/' && str_contains($this->profile, 'tagui_modern_profile_')) {
+if (!$this->persistent_profile && $this->profile !== '' && $this->profile !== '/' && str_contains($this->profile, 'tagui_modern_profile_')) {
 if (DIRECTORY_SEPARATOR !== '\\') {
 @exec('pkill -f ' . escapeshellarg($this->profile) . ' >/dev/null 2>&1');}
 $this->remove_tree($this->profile);}
-$this->profile = '';}
+$this->profile = '';
+$this->persistent_profile = false;}
 
 function navigate($url) {
 $this->command('Page.navigate', array('url' => $url));
@@ -228,22 +348,14 @@ function type_into($locator, $text) {
 $clear = false;
 if (str_starts_with(strtolower($text), '[clear]')) {$clear = true; $text = substr($text, 7);}
 $payload = json_encode($locator, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-$clear_js = $clear ? 'true' : 'false';
-$script = "(function(){\n" . tagui_page_finder_js() . "\nvar found = taguiElement(" . $payload . "); var el = found.el; if (!el) return false;"
+$script = "(function(){\n" . tagui_page_finder_js() . "\nvar found = taguiElement(" . $payload . "); var el = found.el; if (!el) return null;"
 . "try {el.scrollIntoView({block:'center', inline:'center'});} catch (e) {} el.focus();"
-. "if (" . $clear_js . " && ('value' in el)) {el.value = ''; el.dispatchEvent(new Event('input', {bubbles:true})); el.dispatchEvent(new Event('change', {bubbles:true}));}"
-. "return true;})()";
-$focused = $this->evaluate($script);
-if ($focused !== true) return false;
-$parts = preg_split('/(\[(?:enter|tab|space|esc|ENTER|TAB|SPACE|ESC)\])/', $text, -1, PREG_SPLIT_DELIM_CAPTURE);
-foreach ($parts as $part) {
-if ($part === '') continue;
-$lower = strtolower($part);
-if ($lower === '[enter]') {$this->key_name('Enter'); continue;}
-if ($lower === '[tab]') {$this->key_name('Tab'); continue;}
-if ($lower === '[esc]') {$this->key_name('Escape'); continue;}
-if ($lower === '[space]') {$part = ' ';}
-$this->command('Input.insertText', array('text' => $part));}
+. "var r = el.getBoundingClientRect(); return {x: r.left + r.width / 2, y: r.top + r.height / 2};})()";
+$point = $this->evaluate($script);
+if (!is_array($point) || !isset($point['x']) || !isset($point['y'])) return false;
+$this->click_at((float)$point['x'] + $this->frame_dx, (float)$point['y'] + $this->frame_dy, 'left', 1);
+foreach (tagui_type_events($text, $clear) as $event) {
+$this->command('Input.dispatchKeyEvent', $event);}
 return true;}
 
 function device_scale() {
@@ -278,13 +390,13 @@ return array(
 'width' => (float)$viewport['clientWidth'],
 'height' => (float)$viewport['clientHeight']);}
 
-private function key_name($key) {
-$codes = array('Enter' => 13, 'Tab' => 9, 'Escape' => 27);
-$code = isset($codes[$key]) ? $codes[$key] : 0;
-$this->command('Input.dispatchKeyEvent', array(
-'type' => 'keyDown', 'key' => $key, 'code' => $key, 'windowsVirtualKeyCode' => $code, 'nativeVirtualKeyCode' => $code));
-$this->command('Input.dispatchKeyEvent', array(
-'type' => 'keyUp', 'key' => $key, 'code' => $key, 'windowsVirtualKeyCode' => $code, 'nativeVirtualKeyCode' => $code));}
+function set_download_path($dir) {
+$dir = str_replace('\\', '/', (string)$dir);
+$this->download_path = $dir;
+$allow = array('behavior' => 'allow', 'downloadPath' => $dir);
+try {$this->command('Browser.setDownloadBehavior', $allow); return;}
+catch (Exception $e) {}
+$this->command('Page.setDownloadBehavior', $allow);}
 
 function command($method, $params) {
 if ($params instanceof stdClass) $encoded_params = new stdClass();
@@ -662,6 +774,8 @@ public $live = false;
 public $stopped = false;
 public $jump = null;
 public $repo = array();
+public $download_dir = '';
+public $include_stack = array();
 public $inside_run = false;
 public $run_buffer = '';
 public $timeout = 10.0;
@@ -684,6 +798,7 @@ if ($arg !== '') $this->vars['p' . $index] = $arg;
 $index++;}}
 
 function run_lines($lines) {
+$this->sync_repo_vars();
 $this->started_at = microtime(true);
 if (!$this->quiet) $this->emit_raw("\nSTART - automation started - " . tagui_local_stamp());
 $this->execute_range($lines, 0, count($lines) - 1, true);
@@ -711,6 +826,7 @@ if ($active) $this->run_language($block['kind'], $block['body'], $i);
 return $block['next'];}
 $raw = trim($lines[$i]);
 $lower = strtolower($raw);
+if (preg_match('/^tagui(?:\s|$)/i', $raw)) return $this->execute_include($lines, $i, $end, $active);
 if ($lower === '{') {
 $close = $this->find_block_end($lines, $i, $end);
 if ($close < 0) {if ($active) $this->fail($i, 'number of step { does not tally with }'); return $end + 1;}
@@ -733,6 +849,7 @@ return $i + 1;}
 function execute_if($lines, $i, $end, $active) {
 $matched = false;
 while ($i <= $end) {
+$base = $this->indent_of($lines[$i]);
 $line = $this->expand_backticks(trim($lines[$i]));
 $lower = strtolower($line);
 $is_else_if = str_starts_with($lower, 'else if ');
@@ -743,10 +860,16 @@ $take = false;
 if ($is_else) $take = $active && !$matched;
 else {
 $expr = $this->condition_expression($line);
-$take = $active && !$matched && $this->truthy_expr($expr, $i);}
+$evaluated = false;
+$value = false;
+if ($active && !$matched) {
+$value = $this->truthy_expr($expr, $i);
+$evaluated = !$this->stopped;}
+$take = $evaluated && $value;
+if ($evaluated && !$value) $this->trace('SKIP - ' . trim($lines[$i]));}
 if ($take) $matched = true;
 $i++;
-$i = $this->execute_body($lines, $i, $end, $take);
+$i = $this->execute_body($lines, $i, $end, $take, $base);
 if ($is_else) break;
 $next = $this->next_code($lines, $i, $end);
 if ($next === null) break;
@@ -755,27 +878,63 @@ if ($peek === 'else' || str_starts_with($peek, 'else if ')) {$i = $next; continu
 break;}
 return $i;}
 
-function execute_body($lines, $i, $end, $active) {
+function execute_body($lines, $i, $end, $active, $base_indent) {
 $next = $this->next_code($lines, $i, $end);
 if ($next === null) return $i;
+if (trim($lines[$next]) === '{') return $this->execute_statement($lines, $next, $end, $active);
+if ($this->indent_of($lines[$next]) > $base_indent) {
+$last = $next;
+for ($j = $next; $j <= $end; $j++) {
+$piece = trim($lines[$j]);
+if ($piece === '' || str_starts_with($piece, '//')) continue;
+if ($this->indent_of($lines[$j]) <= $base_indent) break;
+$last = $j;}
+$this->execute_range($lines, $next, $last, $active);
+return $last + 1;}
 return $this->execute_statement($lines, $next, $end, $active);}
+
+function execute_include($lines, $i, $end, $active) {
+$raw = trim($lines[$i]);
+if (!$active) return $i + 1;
+$params = tagui_strip_line_comment(trim(substr($raw, 5)));
+if ($params === '') {$this->fail($i, 'filename missing for step ' . $raw); return $i + 1;}
+$path = $this->abs_file($params);
+if (!is_file($path)) {$this->fail($i, 'file not found for step ' . $raw); return $i + 1;}
+$real = realpath($path);
+if ($real === false) $real = $path;
+if (isset($this->include_stack[$real])) {$this->fail($i, 'cannot open file for step ' . $raw); return $i + 1;}
+$included = file($real, FILE_IGNORE_NEW_LINES);
+if ($included === false) {$this->fail($i, 'cannot open file for step ' . $raw); return $i + 1;}
+$saved = $this->flow_path;
+$this->include_stack[$real] = true;
+$this->flow_path = dirname($real);
+$this->execute_range($included, 0, count($included) - 1, true);
+unset($this->include_stack[$real]);
+$this->flow_path = $saved;
+return $i + 1;}
 
 function execute_for($lines, $i, $end, $active) {
 try {$header = $this->expand_backticks(trim($lines[$i]));}
 catch (TaguiExprError $e) {if ($active) $this->fail($i, $e->getMessage()); return $i + 1;}
-$spec = $this->parse_for($header);
+$spec = $this->parse_for(tagui_strip_line_comment($header));
 if ($spec === null) {if ($active) $this->fail($i, 'invalid for loop - ' . trim($lines[$i])); return $i + 1;}
-$body = $this->next_code($lines, $i + 1, $end);
-if ($body === null) return $end + 1;
-if (!$active) return $this->execute_statement($lines, $body, $end, false);
-$from = (int)$spec['from']; $to = (int)$spec['to'];
-if (($to - $from) > 10000) {$this->fail($i, 'for loop range is too large'); return $this->execute_statement($lines, $body, $end, false);}
-$after = $body;
-if ($from > $to) return $this->execute_statement($lines, $body, $end, false);
+$base = $this->indent_of($lines[$i]);
+if ($this->next_code($lines, $i + 1, $end) === null) return $end + 1;
+if (!$active) return $this->execute_body($lines, $i + 1, $end, false, $base);
+$from = $this->loop_bound($spec['from']);
+$to = $this->loop_bound($spec['to']);
+if ($from === null || $to === null) {
+$this->fail($i, 'invalid for loop - ' . trim($lines[$i]));
+return $this->execute_body($lines, $i + 1, $end, false, $base);}
+if (($to - $from) > 10000) {
+$this->fail($i, 'for loop range is too large');
+return $this->execute_body($lines, $i + 1, $end, false, $base);}
+if ($from > $to) return $this->execute_body($lines, $i + 1, $end, false, $base);
+$after = $i + 1;
 for ($value = $from; $value <= $to; $value++) {
 if ($this->stopped) break;
 $this->vars[$spec['var']] = $value;
-$after = $this->execute_statement($lines, $body, $end, true);
+$after = $this->execute_body($lines, $i + 1, $end, true, $base);
 if ($this->jump === 'break') {$this->jump = null; break;}
 if ($this->jump === 'continue') {$this->jump = null; continue;}}
 return $after;}
@@ -908,9 +1067,14 @@ if (str_starts_with(strtolower($line), 'echo ')) $params = trim(substr($line, 5)
 if ($params === '') {$this->fail($index, 'text missing for ' . $line); return;}
 if (str_contains($params, "'") && str_contains($params, '"')) {
 $this->fail($index, 'inconsistent quotes in ' . $params); return;}
+if (!str_contains($params, "'") && !str_contains($params, '"') && preg_match('/\s/', $params)) {
+$this->emit($params); return;}
 $expr = $this->add_concat($params);
 try {$value = $this->expr_value($expr);}
-catch (TaguiExprError $e) {$this->fail($index, $e->getMessage()); return;}
+catch (TaguiExprError $e) {
+if (!str_contains($params, "'") && !str_contains($params, '"') && str_contains($e->getMessage(), 'is not defined')) {
+$this->emit($params); return;}
+$this->fail($index, $e->getMessage()); return;}
 $this->emit($this->stringish($value));}
 
 function snap_step($line, $index) {
@@ -924,10 +1088,10 @@ else {
 $target = trim(substr($params, 0, $split));
 $file = trim(substr($params, $split + 4));
 if ($file === '') $file = $this->next_snap(); else $file = $this->abs_file($file);}
-if (strcasecmp($target, 'page') !== 0 && tagui_is_visual($target)) {$this->visual_gap($index, $line, false); return;}
+if (!$this->is_page_snap($target) && tagui_is_visual($target)) {$this->visual_gap($index, $line, false); return;}
 if (!$this->require_chrome($index)) return;
 $clip = null;
-if (strcasecmp($target, 'page') !== 0) {
+if (!$this->is_page_snap($target)) {
 $info = $this->need($target, $index); if ($info === null) return;
 if ((float)$info['width'] > 0 && (float)$info['height'] > 0) {
 $clip = array('x' => (float)$info['left'], 'y' => (float)$info['top'],
@@ -937,12 +1101,11 @@ catch (Exception $e) {$this->fail($index, $e->getMessage());}}
 
 function wait_step($line, $index) {
 $params = trim(substr($line, 4));
-if ($params === '' || strtolower($params) === 'wait') $params = '5';
-if (!is_numeric($params)) {$this->fail($index, 'live mode wait needs a number of seconds'); return;}
-$seconds = (float)$params;
+if ($params === '' || strtolower($params) === 'wait') $seconds = 5.0;
+else $seconds = floatval($params);
 if ($seconds < 0) $seconds = 0;
 if ($seconds > 120) $seconds = 120;
-usleep((int)($seconds * 1000000));}
+if ($seconds > 0) usleep((int)($seconds * 1000000));}
 
 function dump_step($line, $index) {
 $params = trim(substr($line, 4));
@@ -956,22 +1119,32 @@ catch (TaguiExprError $e) {$this->fail($index, $e->getMessage()); return;}
 file_put_contents($file, $this->stringish($value));}
 
 function timeout_step($line, $index) {
-$params = trim(substr($line, 8));
-if (!is_numeric($params)) {$this->fail($index, 'time in seconds missing for ' . $line); return;}
-$this->timeout = (float)$params;
+$params = tagui_strip_line_comment(trim(substr($line, 8)));
+if ($params === '') {$this->fail($index, 'time in seconds missing for ' . $line); return;}
+$this->timeout = floatval($params);
 if ($this->chrome !== null) $this->chrome->timeout = $this->timeout;}
 
 function dom_step($line, $index) {
 $params = trim(substr($line, 4));
 if ($params === '') {$this->fail($index, 'statement missing for ' . $line); return;}
+$lower = strtolower($params);
+if ($lower === 'begin' || $lower === 'finish') {
+$this->fail($index, 'dom begin / dom finish is a block. Put it in a flow file.'); return;}
+$this->dom_run($params, $index);}
+
+function dom_run($code, $index) {
 if (!$this->require_chrome($index)) return;
-if (str_starts_with($params, 'return ')) $params = trim(substr($params, 7));
-try {$this->vars['dom_result'] = $this->chrome->evaluate($params);}
+$json = array();
+if (isset($this->vars['dom_json']) && (is_array($this->vars['dom_json']) || is_object($this->vars['dom_json']))) $json = $this->vars['dom_json'];
+$payload = json_encode($json, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+if ($payload === false) $payload = '{}';
+$script = '(function(dom_json){' . $code . '})(' . $payload . ')';
+try {$this->vars['dom_result'] = $this->chrome->evaluate($script);}
 catch (Exception $e) {$this->fail($index, $e->getMessage());}}
 
 function language_block($lines, $i, $end) {
 $header = strtolower(trim($lines[$i]));
-if (!preg_match('/^(js|py|r|vision)\s+begin$/', $header, $match)) return null;
+if (!preg_match('/^(js|py|r|vision|dom)\s+begin$/', $header, $match)) return null;
 $kind = $match[1];
 $body = array();
 $finish = $kind . ' finish';
@@ -986,6 +1159,7 @@ if ($kind === 'js') $this->js_run($body, $index);
 else if ($kind === 'py') $this->py_run($body, $index);
 else if ($kind === 'r') $this->r_run($body, $index);
 else if ($kind === 'vision') $this->visual_gap($index, 'vision ' . $body);
+else if ($kind === 'dom') $this->dom_run($body, $index);
 else $this->fail($index, 'cannot run ' . $kind);}
 
 function js_step($line, $index) {
@@ -1091,14 +1265,30 @@ return array(
 'visible' => function ($args) use ($engine) {return $engine->visible_arg($args);},
 'count' => function ($args) use ($engine) {return $engine->count_arg($args);});}
 
-function exists_arg($args) {
-if (!isset($args[0]) || $this->chrome === null) return false;
-$info = $this->chrome->find((string)$args[0], true);
-return $info !== null;}
-function visible_arg($args) {
-if (!isset($args[0]) || $this->chrome === null) return false;
-$info = $this->chrome->find((string)$args[0], true);
-return $info !== null && !empty($info['visible']);}
+function exists_arg($args) {return $this->presence_arg($args, 'present');}
+function visible_arg($args) {return $this->presence_arg($args, 'visible');}
+function image_present($command) {
+return TaguiSikuli::run($command, max(30.0, (float)$this->timeout));}
+function presence_arg($args, $intent) {
+if (!isset($args[0])) return false;
+$target = trim((string)$args[0]);
+if ($target !== '' && tagui_is_visual($target)) {
+$command = $intent . ' ' . $this->visual_target($target);
+$deadline = microtime(true) + (float)$this->timeout;
+while (true) {
+try {$found = $this->image_present($command);}
+catch (Exception $e) {throw new TaguiExprError($e->getMessage());}
+if ($found) return true;
+if (microtime(true) >= $deadline) return false;
+usleep(200000);}}
+if ($this->chrome === null) return false;
+$info = $this->chrome->find($target, true);
+if ($info === null) return false;
+if ($intent === 'visible') return !empty($info['visible']);
+return true;}
+function visual_target($target) {
+if (substr($target, 0, 1) === '(') return $target;
+return $this->abs_file($target);}
 function count_arg($args) {
 if (!isset($args[0]) || $this->chrome === null) return 0;
 $info = $this->chrome->locate((string)$args[0]);
@@ -1152,13 +1342,35 @@ $logic = substr($logic, 0, $var_pos) . '(' . $var[1] . '.indexOf(' . $quoted . '
 return $logic;}
 
 function parse_for($header) {
-if (preg_match('/^for\s+([A-Za-z_][A-Za-z0-9_]*)\s+from\s+(-?\d+|infinity)\s+to\s+(-?\d+|infinity)\s*$/i', $header, $m)) {
-$from = strtolower($m[2]) === 'infinity' ? 1024 : (int)$m[2];
-$to = strtolower($m[3]) === 'infinity' ? 1024 : (int)$m[3];
-return array('var' => $m[1], 'from' => $from, 'to' => $to);}
-if (preg_match('/^for\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(-?\d+)\s*;\s*\1\s*<=\s*(-?\d+)\s*;\s*\1\s*\+\+\s*\)\s*$/', $header, $m)) {
-return array('var' => $m[1], 'from' => (int)$m[2], 'to' => (int)$m[3]);}
+$header = tagui_strip_line_comment(trim($header));
+$bound = '[A-Za-z_][A-Za-z0-9_]*|-?\d+';
+if (preg_match('/^for\s+([A-Za-z_][A-Za-z0-9_]*)\s+from\s+(' . $bound . ')\s+to\s+(' . $bound . ')\s*$/i', $header, $m)) {
+return array('var' => $m[1], 'from' => $this->for_bound_literal($m[2]), 'to' => $this->for_bound_literal($m[3]));}
+if (preg_match('/^for\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(' . $bound . ')\s*;\s*\1\s*<=\s*(' . $bound . ')\s*;\s*\1\s*\+\+\s*\)\s*$/', $header, $m)) {
+return array('var' => $m[1], 'from' => $this->for_bound_literal($m[2]), 'to' => $this->for_bound_literal($m[3]));}
 return null;}
+
+function for_bound_literal($token) {
+if (strtolower($token) === 'infinity') return 1024;
+if (is_numeric($token)) return (int)$token;
+return $token;}
+
+function loop_bound($token) {
+if (is_int($token)) return $token;
+$token = trim((string)$token);
+if (strtolower($token) === 'infinity') return 1024;
+if (is_numeric($token)) return (int)$token;
+if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $token) && array_key_exists($token, $this->vars) && is_numeric($this->vars[$token])) {
+return (int)$this->vars[$token];}
+return null;}
+
+function sync_repo_vars() {
+if (!is_array($this->repo)) return;
+foreach ($this->repo as $key => $value) $this->vars[tagui_repo_identifier($key)] = $value;}
+
+function indent_of($line) {
+if (preg_match('/^[ \t]*/', (string)$line, $match)) return strlen($match[0]);
+return 0;}
 
 function is_assignment($line) {
 if (str_starts_with($line, 'var ')) $line = trim(substr($line, 4));
@@ -1212,7 +1424,17 @@ if (!$this->live && $this->chrome !== null && str_contains($message, 'cannot fin
 try {$this->chrome->screenshot($this->next_snap(), null);} catch (Exception $e) {}}
 if (!$this->live) $this->stopped = true;}
 
-function trace($line) {if (!$this->quiet && !$this->live) $this->emit($line);}
+function is_page_snap($target) {
+$name = strtolower(trim((string)$target));
+return $name === 'page' || $name === 'page.png';}
+
+function redacted_trace($line) {
+if (tagui_keyword_intent($line) !== 'type') return $line;
+$pos = stripos($line, ' as ');
+if ($pos === false) return $line;
+return substr($line, 0, $pos + 4) . '[redacted]';}
+
+function trace($line) {if (!$this->quiet && !$this->live) $this->emit($this->redacted_trace($line));}
 
 function emit($text) {$this->emit_raw($text);}
 

@@ -89,6 +89,16 @@ if (strlen($params) > 4 && substr($params, 0, 1) === '(' && substr($params, -1) 
 && !preg_match('/[a-zA-Z]/', $params)) return true;
 return false;}
 
+function tagui_strip_line_comment($text) {
+return rtrim((string)preg_replace('/\s+\/\/.*$/', '', (string)$text));}
+
+function tagui_repo_identifier($name) {
+$name = str_replace(' ', '_', (string)$name);
+$name = preg_replace('/[^A-Za-z0-9_]/', '', $name);
+if (!is_string($name) || $name === '') return 'invalid_variable_name';
+if (is_numeric(substr($name, 0, 1))) $name = '_' . $name;
+return $name;}
+
 function tagui_steps_javascript() {
 $attrs = json_encode(tagui_locator_attributes());
 $keywords = tagui_keyword_table();
@@ -270,14 +280,32 @@ try {if (!$this->chrome->set_file($pair[0], $file)) $this->fail($index, 'unable 
 catch (Exception $e) {$this->fail($index, $e->getMessage());}}
 
 function download_step($line, $index) {
-$pair = $this->split_keyword($line, ' to ');
-if ($pair === null) {$this->fail($index, 'url/filename missing for ' . $line); return;}
-$url = $this->absolute_url($pair[0]);
-$file = $this->abs_file($pair[1]);
+$params = tagui_strip_line_comment(trim(substr($line, strpos($line, ' ') + 1)));
+if ($params === '') {$this->fail($index, 'location missing for ' . $line); return;}
+if (preg_match('/^to\s+(.+)$/i', $params, $match)) {$this->download_directory(trim($match[1]), $index); return;}
+$split = stripos($params, ' to ');
+if ($split === false) {
+if (preg_match('#^[a-z][a-z0-9+.-]*://#i', $params)) {$this->fail($index, 'url/filename missing for ' . $line); return;}
+$this->download_directory($params, $index); return;}
+$url = trim(substr($params, 0, $split));
+$file = trim(substr($params, $split + 4));
+if ($url === '' || $file === '') {$this->fail($index, 'url/filename missing for ' . $line); return;}
+$url = $this->absolute_url($url);
+$file = $this->abs_file($file);
 try {$bytes = $this->http_get($url);
 if ($bytes === null) {$this->fail($index, 'cannot download ' . $url); return;}
 if (file_put_contents($file, $bytes) === false) $this->fail($index, 'cannot save ' . $file);}
 catch (Exception $e) {$this->fail($index, $e->getMessage());}}
+
+function download_directory($folder, $index) {
+$folder = $this->abs_file(trim($folder));
+if ($folder === '') {$this->fail($index, 'location missing for download'); return;}
+if (!is_dir($folder) && !@mkdir($folder, 0777, true) && !is_dir($folder)) {
+$this->fail($index, 'cannot create download folder ' . $folder); return;}
+$this->download_dir = $folder;
+if ($this->chrome !== null && method_exists($this->chrome, 'set_download_path')) {
+try {$this->chrome->set_download_path($folder);}
+catch (Exception $e) {$this->fail($index, $e->getMessage());}}}
 
 function receive_step($line, $index) {
 $pair = $this->split_keyword($line, ' to ');
@@ -430,13 +458,22 @@ try {$text = $this->stringish($this->expr_value($this->add_concat($take ? $when_
 catch (TaguiExprError $e) {$this->fail($index, $e->getMessage()); return;}
 $this->emit($text);}
 
+function visual_command($line) {
+$self = $this;
+$rewritten = preg_replace_callback('/(?<![A-Za-z0-9_])([\'"]?)([^\'"\s]+?\.(?:png|bmp))\1/i', function ($match) use ($self) {
+$path = $match[2];
+if ($path === '' || $path[0] === '(') return $match[0];
+return $match[1] . $self->abs_file($path) . $match[1];}, $line);
+return is_string($rewritten) ? $rewritten : $line;}
+
 function visual_gap($index, $line, $trace = true) {
 if ($trace) $this->trace($line);
-try {$ok = TaguiSikuli::run($line, max(30.0, (float)$this->timeout));}
+$command = $this->visual_command($line);
+try {$ok = TaguiSikuli::run($command, max(30.0, (float)$this->timeout));}
 catch (Exception $e) {$this->fail($index, $e->getMessage()); return;}
 $text = TaguiSikuli::text();
 if (!$ok) {
-$this->fail($index, 'visual step failed - ' . $line . '. ' . TaguiSikuli::failure_detail(TaguiSikuli::last_result()));
+$this->fail($index, 'visual step failed - ' . $this->redacted_trace($line) . '. ' . TaguiSikuli::failure_detail(TaguiSikuli::last_result()));
 return;}
 $intent = tagui_keyword_intent($line);
 if ($intent === 'read') {
@@ -463,9 +500,9 @@ $params = trim(substr($line, strpos($line, ' ') + 1));
 if ($params === '' || strcasecmp($params, 'frame') === 0) {$this->fail($i, 'name missing for ' . $line); return $i + 1;}
 if ($active && !$this->require_chrome($i)) return $i + 1;
 if ($this->live) {$this->fail($i, 'frame is not supported in live mode. It opens a block around the following steps; put it in a flow file.'); return $i + 1;}
-$body = $this->next_code($lines, $i + 1, $end);
-if ($body === null) return $end + 1;
-if (!$active) return $this->execute_statement($lines, $body, $end, false);
+$base = $this->indent_of($lines[$i]);
+if ($this->next_code($lines, $i + 1, $end) === null) return $end + 1;
+if (!$active) return $this->execute_body($lines, $i + 1, $end, false, $base);
 $names = array_map('trim', explode('|', $params));
 $pushed = 0;
 foreach ($names as $name) {
@@ -473,7 +510,7 @@ if ($name === '') continue;
 try {if (!$this->chrome->push_frame($name)) {$this->fail($i, 'cannot find frame ' . $name); break;}}
 catch (Exception $e) {$this->fail($i, $e->getMessage()); break;}
 $pushed++;}
-$after = $this->execute_statement($lines, $body, $end, $pushed === count(array_filter($names, function ($name) {return $name !== '';})));
+$after = $this->execute_body($lines, $i + 1, $end, $pushed === count(array_filter($names, function ($name) {return $name !== '';})), $base);
 while ($pushed > 0) {try {$this->chrome->pop_frame();} catch (Exception $e) {} $pushed--;}
 return $after;}
 
@@ -484,14 +521,14 @@ $params = trim(substr($line, strpos($line, ' ') + 1));
 if ($params === '' || strcasecmp($params, 'popup') === 0) {$this->fail($i, 'keyword missing for ' . $line); return $i + 1;}
 if ($active && !$this->require_chrome($i)) return $i + 1;
 if ($this->live) {$this->fail($i, 'popup is not supported in live mode. It opens a block around the following steps; put it in a flow file.'); return $i + 1;}
-$body = $this->next_code($lines, $i + 1, $end);
-if ($body === null) return $end + 1;
-if (!$active) return $this->execute_statement($lines, $body, $end, false);
+$base = $this->indent_of($lines[$i]);
+if ($this->next_code($lines, $i + 1, $end) === null) return $end + 1;
+if (!$active) return $this->execute_body($lines, $i + 1, $end, false, $base);
 $opened = false;
 try {$opened = $this->chrome->push_popup($params, $this->timeout);}
 catch (Exception $e) {$this->fail($i, $e->getMessage());}
 if (!$opened && !$this->stopped) $this->fail($i, 'cannot find popup ' . $params);
-$after = $this->execute_statement($lines, $body, $end, $opened);
+$after = $this->execute_body($lines, $i + 1, $end, $opened, $base);
 if ($opened) {try {$this->chrome->pop_popup();} catch (Exception $e) {}}
 return $after;}
 
@@ -499,16 +536,17 @@ function execute_while($lines, $i, $end, $active) {
 try {$line = $this->expand_backticks(trim($lines[$i]));}
 catch (TaguiExprError $e) {if ($active) $this->fail($i, $e->getMessage()); return $i + 1;}
 if ($this->live) {$this->fail($i, 'while is not supported in live mode. Put it in a flow file.'); return $i + 1;}
-$body = $this->next_code($lines, $i + 1, $end);
-if ($body === null) return $end + 1;
-if (!$active) return $this->execute_statement($lines, $body, $end, false);
+$base = $this->indent_of($lines[$i]);
+if ($this->next_code($lines, $i + 1, $end) === null) return $end + 1;
+$after = $this->execute_body($lines, $i + 1, $end, false, $base);
+if (!$active) return $after;
 $expr = $this->condition_expression(trim(substr(trim($line), 5)));
-$guard = 0; $after = $body;
+$guard = 0;
 while ($guard < 10000) {
 if ($this->stopped) break;
 if (!$this->truthy_expr($expr, $i)) break;
 $guard++;
-$after = $this->execute_statement($lines, $body, $end, true);
+$after = $this->execute_body($lines, $i + 1, $end, true, $base);
 if ($this->jump === 'break') {$this->jump = null; break;}
 if ($this->jump === 'continue') {$this->jump = null; continue;}}
 if ($guard >= 10000) $this->fail($i, 'while loop exceeded 10000 iterations');

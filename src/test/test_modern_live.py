@@ -62,12 +62,15 @@ def rpa_round_trip(workdir: Path) -> None:
     """Speak the RPA-Python init/send/close sequence to a live flow."""
     flow = workdir / "rpa_python"
     flow.write_text("live\n", encoding="utf-8")
+    env = os.environ.copy()
+    env["TAGUI_CHROME_ISOLATED"] = "1"
     process = subprocess.Popen(
         [str(TAGUI), str(flow), "headless", "modern", "quiet"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         cwd=str(workdir),
+        env=env,
     )
     try:
         read_until(process, "LIVE MODE - type done to quit", 40)
@@ -130,6 +133,7 @@ def mcp_round_trip(workdir: Path) -> None:
 
 
 def main() -> None:
+    os.environ["TAGUI_CHROME_ISOLATED"] = "1"
     with tempfile.TemporaryDirectory(prefix="tagui_modern_live_") as directory:
         workdir = Path(directory)
         rpa_round_trip(workdir)
