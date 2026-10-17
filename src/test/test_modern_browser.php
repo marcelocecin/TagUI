@@ -55,6 +55,7 @@ $page_url,
 'echo "api-ok"',
 '')) . "\n");
 
+putenv('TAGUI_CHROME_ISOLATED=1');
 $command = escapeshellarg($tagui) . ' ' . escapeshellarg($flow) . ' headless modern quiet speed';
 $descriptor = array(1 => array('pipe', 'w'), 2 => array('pipe', 'w'));
 $process = proc_open($command, $descriptor, $pipes, $work);

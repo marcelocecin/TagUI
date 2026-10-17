@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from tagui_mcp.runner import run_flow  # noqa: E402
 
 
 def main() -> None:
+    os.environ["TAGUI_CHROME_ISOLATED"] = "1"
     work = Path("/tmp/tagui_modern_repair")
     work.mkdir(exist_ok=True)
     page = ROOT / "src" / "test" / "fixtures" / "modern_page.html"

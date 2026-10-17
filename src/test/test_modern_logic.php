@@ -371,9 +371,149 @@ expect('repo stopped', $repo->stopped, false);
 expect('repo name', tagui_repo_identifier('create account'), 'create_account');
 expect('repo iteration', tagui_repo_identifier('[iteration]'), 'iteration');
 
+$saved_profile = getenv('TAGUI_CHROME_PROFILE');
+$saved_isolated = getenv('TAGUI_CHROME_ISOLATED');
+putenv('TAGUI_CHROME_PROFILE');
+putenv('TAGUI_CHROME_ISOLATED');
+$launcher = new TaguiChrome();
+$official = $launcher->launch_plan('/usr/bin/google-chrome', 9333, false);
+expect('official args', $official['args'], array(
+'/usr/bin/google-chrome',
+'--remote-debugging-port=9333',
+'--user-data-dir=' . dirname(__DIR__) . '/chrome/tagui_user_profile',
+'--window-size=1366,842',
+'about:blank'));
+expect('official persistent', $official['persistent'], true);
+$official_line = implode("\n", $official['args']);
+expect('official extensions', str_contains($official_line, '--disable-extensions'), false);
+expect('official sandbox', str_contains($official_line, '--no-sandbox'), false);
+putenv('TAGUI_CHROME_PROFILE=/data/buster-profile');
+$custom = $launcher->launch_plan('/usr/bin/google-chrome', 9333, true);
+expect('custom profile', $custom['args'][2], '--user-data-dir=/data/buster-profile');
+expect('custom headless', in_array('--headless', $custom['args'], true) && in_array('--disable-gpu', $custom['args'], true), true);
+expect('custom no sandbox', in_array('--no-sandbox', $custom['args'], true), false);
+expect('custom url', $custom['args'][count($custom['args']) - 1], 'about:blank');
+putenv('TAGUI_CHROME_PROFILE');
+putenv('TAGUI_CHROME_ISOLATED=1');
+$isolated = $launcher->launch_plan('/usr/bin/google-chrome', 9333, true);
+expect('isolated profile', str_contains($isolated['profile'], 'tagui_modern_profile_'), true);
+expect('isolated persistent', $isolated['persistent'], false);
+expect('isolated sandbox', in_array('--no-sandbox', $isolated['args'], true), true);
+expect('isolated extensions', in_array('--disable-extensions', $isolated['args'], true), true);
+putenv('TAGUI_CHROME_ISOLATED');
+if (is_string($saved_profile) && $saved_profile !== '') putenv('TAGUI_CHROME_PROFILE=' . $saved_profile);
+else putenv('TAGUI_CHROME_PROFILE');
+if (is_string($saved_isolated) && $saved_isolated !== '') putenv('TAGUI_CHROME_ISOLATED=' . $saved_isolated);
+else putenv('TAGUI_CHROME_ISOLATED');
+
+$typed = tagui_type_events('a[enter][tab][esc][backspace] ');
+$typed_view = array();
+foreach ($typed as $event) {
+$key = $event['key'] === ' ' ? 'Space' : $event['key'];
+$text = '';
+if (isset($event['text'])) $text = '=' . ($event['text'] === ' ' ? 'Space' : $event['text']);
+$typed_view[] = $event['type'] . ' ' . $key . $text;}
+expect('key events', $typed_view, array(
+'keyDown a=a', 'keyUp a',
+'keyDown Enter', 'keyUp Enter',
+'keyDown Tab', 'keyUp Tab',
+'keyDown Escape', 'keyUp Escape',
+'keyDown Backspace', 'keyUp Backspace',
+'keyDown Space=Space', 'keyUp Space'));
+expect('enter code', $typed[2]['windowsVirtualKeyCode'], 13);
+expect('backspace code', $typed[8]['windowsVirtualKeyCode'], 8);
+$cleared = tagui_type_events('x', true);
+$clear_keys = array();
+foreach ($cleared as $event) {
+if ($event['type'] === 'keyDown') $clear_keys[] = $event['key'] . (isset($event['text']) ? '=' . $event['text'] : '');}
+expect('clear keys', $clear_keys, array('Control', 'a', 'Backspace', 'x=x'));
+
+class RecordingChrome extends TaguiChrome {
+public $commands = array();
+public $clicks = array();
+function evaluate($expression) {
+$this->commands[] = array('evaluate', $expression);
+return array('x' => 8.0, 'y' => 9.0);}
+function click_at($x, $y, $button, $clicks) {$this->clicks[] = array($x, $y, $button, $clicks);}
+function command($method, $params) {
+$this->commands[] = array($method, $params);
+return array();}}
+$recorder = new RecordingChrome();
+$recorder->frame_dx = 1;
+$recorder->frame_dy = 2;
+expect('type ok', $recorder->type_into('#password', '[clear]ab[enter]'), true);
+expect('type click', $recorder->clicks, array(array(9.0, 11.0, 'left', 1)));
+$focus_script = $recorder->commands[0][1];
+expect('no synthetic input', str_contains($focus_script, 'dispatchEvent') || str_contains($focus_script, 'InputEvent') || str_contains($focus_script, 'el.value ='), false);
+$methods = array();
+$down_text = array();
+foreach ($recorder->commands as $call) {
+$methods[] = $call[0];
+if ($call[0] === 'Input.dispatchKeyEvent' && $call[1]['type'] === 'keyDown' && isset($call[1]['text'])) $down_text[] = $call[1]['text'];}
+expect('no insertText', in_array('Input.insertText', $methods, true), false);
+expect('typed chars', $down_text, array('a', 'b'));
+
+$secret = new TaguiModern(null, false, '/tmp');
+$secret->capture = true;
+$secret->execute_range(array('type #password as secret-value[enter]'), 0, 0, true);
+expect('redacted trace', $secret->captured[0], 'type #password as [redacted]');
+expect('secret hidden', str_contains(implode("\n", $secret->captured), 'secret-value'), false);
+expect('type closed', $secret->stopped, true);
+
+$skip = new TaguiModern(null, false, '/tmp');
+$skip->capture = true;
+$skip->vars['menu'] = 'salads';
+$skip->execute_range(array(
+'if menu contains "meat"',
+'echo "no"',
+'else if menu contains "fish"',
+'echo "nope"',
+'else',
+'echo "yes"',
+'if menu contains "salads"',
+'echo "taken"'), 0, 7, true);
+expect('skip false branch', $skip->captured, array(
+'SKIP - if menu contains "meat"',
+'SKIP - else if menu contains "fish"',
+'yes',
+'taken'));
+expect('skip not failure', $skip->stopped, false);
+
+$vis = new TaguiModern(null, true, '/flows/podio');
+expect('visual abs', $vis->visual_command('click visao/login.png'), 'click /flows/podio/visao/login.png');
+expect('visual coords', $vis->visual_command('click (12,34)'), 'click (12,34)');
+expect('visual kept', $vis->visual_command('rclick /abs/mark.png'), 'rclick /abs/mark.png');
+expect('page snap name', $vis->is_page_snap('page.png'), true);
+expect('nested page image', $vis->is_page_snap('visao/page.png'), false);
+
+class CountingSikuli extends TaguiModern {
+public $image_calls = 0;
+public $image_command = '';
+function image_present($command) {
+$this->image_calls++;
+$this->image_command = $command;
+return $this->image_calls >= 3;}}
+$poll = new CountingSikuli(null, true, '/flows/podio');
+$poll->timeout = 5;
+expect('exist polls', $poll->exists_arg(array('visao/login.png')), true);
+expect('exist calls', $poll->image_calls, 3);
+expect('exist abs', $poll->image_command, 'present /flows/podio/visao/login.png');
+class MissingImage extends TaguiModern {
+public $image_calls = 0;
+function image_present($command) {$this->image_calls++; return false;}}
+$miss = new MissingImage(null, true, '/flows/podio');
+$miss->timeout = 0.35;
+$miss_started = microtime(true);
+expect('exist timeout', $miss->exists_arg(array('visao/nope.png')), false);
+expect('exist waited', $miss->image_calls >= 2 && (microtime(true) - $miss_started) < 2, true);
+
 putenv('TAGUI_SIKULI_JAR=/tmp/tagui-missing-oculix.jar');
+$page_snap = new TaguiModern(null, true, '/tmp');
+$page_snap->capture = true;
+$page_snap->execute_range(array('snap page.png to shot.png'), 0, 0, true);
+expect('page.png fullscreen', $page_snap->stopped && str_contains($page_snap->captured[0], 'browser is not open'), true);
+expect('page.png not sikuli', str_contains($page_snap->captured[0], 'OculiX'), false);
 $routes = array(
-'snap page.png to shot.png',
 'click (12,34)',
 'keyboard a',
 'rclick mark.png');

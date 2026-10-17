@@ -458,13 +458,22 @@ try {$text = $this->stringish($this->expr_value($this->add_concat($take ? $when_
 catch (TaguiExprError $e) {$this->fail($index, $e->getMessage()); return;}
 $this->emit($text);}
 
+function visual_command($line) {
+$self = $this;
+$rewritten = preg_replace_callback('/(?<![A-Za-z0-9_])([\'"]?)([^\'"\s]+?\.(?:png|bmp))\1/i', function ($match) use ($self) {
+$path = $match[2];
+if ($path === '' || $path[0] === '(') return $match[0];
+return $match[1] . $self->abs_file($path) . $match[1];}, $line);
+return is_string($rewritten) ? $rewritten : $line;}
+
 function visual_gap($index, $line, $trace = true) {
 if ($trace) $this->trace($line);
-try {$ok = TaguiSikuli::run($line, max(30.0, (float)$this->timeout));}
+$command = $this->visual_command($line);
+try {$ok = TaguiSikuli::run($command, max(30.0, (float)$this->timeout));}
 catch (Exception $e) {$this->fail($index, $e->getMessage()); return;}
 $text = TaguiSikuli::text();
 if (!$ok) {
-$this->fail($index, 'visual step failed - ' . $line . '. ' . TaguiSikuli::failure_detail(TaguiSikuli::last_result()));
+$this->fail($index, 'visual step failed - ' . $this->redacted_trace($line) . '. ' . TaguiSikuli::failure_detail(TaguiSikuli::last_result()));
 return;}
 $intent = tagui_keyword_intent($line);
 if ($intent === 'read') {

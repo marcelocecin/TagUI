@@ -6,6 +6,7 @@
 require_once dirname(__DIR__) . '/tagui_modern.php';
 
 putenv('TAGUI_DEVICE_SCALE=2');
+putenv('TAGUI_CHROME_ISOLATED=1');
 $work = sys_get_temp_dir() . '/tagui_screen_' . getmypid();
 mkdir($work);
 $html = $work . '/box.html';
