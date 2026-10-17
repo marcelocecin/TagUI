@@ -459,12 +459,29 @@ catch (TaguiExprError $e) {$this->fail($index, $e->getMessage()); return;}
 $this->emit($text);}
 
 function visual_command($line) {
+$intent = tagui_keyword_intent($line);
+if ($intent === 'type') {
+$space = strpos($line, ' ');
+$params = $space === false ? '' : substr($line, $space + 1);
+$split = stripos($params, ' as ');
+if ($split !== false) {
+$target = trim(substr($params, 0, $split));
+$rest = substr($params, $split);
+$prefix = $space === false ? $line : rtrim(substr($line, 0, $space));
+return $prefix . ' ' . $this->abs_visual_token($target) . $rest;}}
 $self = $this;
 $rewritten = preg_replace_callback('/(?<![A-Za-z0-9_])([\'"]?)([^\'"\s]+?\.(?:png|bmp))\1/i', function ($match) use ($self) {
-$path = $match[2];
-if ($path === '' || $path[0] === '(') return $match[0];
-return $match[1] . $self->abs_file($path) . $match[1];}, $line);
+return $match[1] . $self->abs_visual_token($match[2]) . $match[1];}, $line);
 return is_string($rewritten) ? $rewritten : $line;}
+
+function abs_visual_token($token) {
+$token = (string)$token;
+if ($token === '' || $token[0] === '(') return $token;
+$bare = trim($token, "\"'");
+if ($bare === '' || !tagui_is_visual($bare) || $bare[0] === '(') return $token;
+$abs = $this->abs_file($bare);
+if ($bare === $token) return $abs;
+return $token[0] . $abs . substr($token, -1);}
 
 function visual_gap($index, $line, $trace = true) {
 if ($trace) $this->trace($line);
