@@ -21,6 +21,30 @@ require_once __DIR__ . '/ws/BadOpcodeException.php';
 require_once __DIR__ . '/ws/BadUriException.php';
 require_once __DIR__ . '/ws/ConnectionException.php';
 require_once __DIR__ . '/tagui_steps.php';
+
+function tagui_is_elf($path) {
+if (!is_string($path) || !is_file($path) || !is_executable($path)) return false;
+$handle = fopen($path, 'rb');
+if ($handle === false) return false;
+$magic = fread($handle, 4);
+fclose($handle);
+return $magic === "\x7fELF";}
+
+function tagui_unwrap_chromium($path) {
+if (!is_string($path) || $path === '' || !is_file($path)) return $path;
+$base = basename($path);
+if ($base !== 'chromium' && $base !== 'chromium-browser') return $path;
+if (tagui_is_elf($path)) return $path;
+$dir = dirname($path);
+$candidates = array(
+$dir . '/../lib/chromium/chromium',
+$dir . '/../lib/chromium-browser/chromium-browser',
+'/usr/lib/chromium/chromium',
+'/usr/lib/chromium-browser/chromium-browser');
+foreach ($candidates as $candidate) {
+$real = realpath($candidate);
+if (is_string($real) && tagui_is_elf($real)) return $real;}
+return $path;}
 require_once __DIR__ . '/tagui_runtime.php';
 
 /* -------------------------------------------------------------------------- */
@@ -317,9 +341,11 @@ throw new RuntimeException('Chrome did not open a DevTools socket on port ' . $t
 
 private function find_binary() {
 $from_env = getenv('TAGUI_CHROME_BIN');
-if (is_string($from_env) && $from_env !== '' && is_file($from_env)) return $from_env;
+if (is_string($from_env) && $from_env !== '' && is_file($from_env)) return tagui_unwrap_chromium($from_env);
 $candidates = array(
-'google-chrome-stable', '/opt/google/chrome/chrome', 'chromium', 'chromium-browser',
+'google-chrome-stable', '/opt/google/chrome/chrome',
+'/usr/lib/chromium/chromium', '/usr/lib/chromium-browser/chromium-browser',
+'chromium', 'chromium-browser',
 'microsoft-edge-stable', 'microsoft-edge', 'google-chrome',
 // App-bundle paths are the same on Apple Silicon and Intel macOS.
 '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -341,10 +367,10 @@ $candidates[] = $local . '\\Microsoft\\Edge\\Application\\msedge.exe';}}
 foreach ($candidates as $candidate) {
 if ($candidate === '') continue;
 if (str_contains($candidate, DIRECTORY_SEPARATOR) || str_contains($candidate, '/')) {
-if (is_file($candidate)) return $candidate;
+if (is_file($candidate)) return tagui_unwrap_chromium($candidate);
 continue;}
 $found = $this->which($candidate);
-if ($found !== '') return $found;}
+if ($found !== '') return tagui_unwrap_chromium($found);}
 return '';}
 
 function push_frame($name) {
@@ -858,7 +884,7 @@ $split = stripos($params, ' to ');
 if ($split === false) {$this->fail($index, 'target/variable missing for ' . $line); return;}
 $target = trim(substr($params, 0, $split));
 $name = trim(substr($params, $split + 4));
-if (tagui_is_visual($target)) {$this->visual_gap($index, $line); return;}
+if (tagui_is_visual($target)) {$this->visual_gap($index, $line, false); return;}
 if ($target === '' || $name === '' || !preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $name)) {
 $this->fail($index, 'target/variable missing for ' . $line); return;}
 if (strcasecmp($target, 'page') === 0) {
@@ -898,7 +924,7 @@ else {
 $target = trim(substr($params, 0, $split));
 $file = trim(substr($params, $split + 4));
 if ($file === '') $file = $this->next_snap(); else $file = $this->abs_file($file);}
-if (strcasecmp($target, 'page') !== 0 && tagui_is_visual($target)) {$this->visual_gap($index, $line); return;}
+if (strcasecmp($target, 'page') !== 0 && tagui_is_visual($target)) {$this->visual_gap($index, $line, false); return;}
 if (!$this->require_chrome($index)) return;
 $clip = null;
 if (strcasecmp($target, 'page') !== 0) {

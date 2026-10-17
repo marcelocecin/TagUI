@@ -249,7 +249,7 @@ trait TaguiModernSteps {
 function select_step($line, $index) {
 $pair = $this->split_keyword($line, ' as ');
 if ($pair === null) {$this->fail($index, 'target/option missing for ' . $line); return;}
-if (tagui_is_visual($pair[0]) || tagui_is_visual($pair[1])) {$this->visual_gap($index, $line); return;}
+if (tagui_is_visual($pair[0]) || tagui_is_visual($pair[1])) {$this->visual_gap($index, $line, false); return;}
 if ($this->need($pair[0], $index) === null) return;
 $locator = json_encode($pair[0], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 $option = json_encode($pair[1], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -299,7 +299,7 @@ $split = stripos($params, ' to ');
 $target = $split === false ? $params : trim(substr($params, 0, $split));
 $file = $split === false ? '' : trim(substr($params, $split + 4));
 if ($params === '') {$this->fail($index, 'target missing for ' . $line); return;}
-if (tagui_is_visual($target)) {$this->visual_gap($index, $line); return;}
+if (tagui_is_visual($target)) {$this->visual_gap($index, $line, false); return;}
 $text = '';
 if (strcasecmp($target, 'page') === 0) {
 if (!$this->require_chrome($index)) return;
@@ -430,8 +430,8 @@ try {$text = $this->stringish($this->expr_value($this->add_concat($take ? $when_
 catch (TaguiExprError $e) {$this->fail($index, $e->getMessage()); return;}
 $this->emit($text);}
 
-function visual_gap($index, $line) {
-$this->trace($line);
+function visual_gap($index, $line, $trace = true) {
+if ($trace) $this->trace($line);
 try {$ok = TaguiSikuli::run($line, max(30.0, (float)$this->timeout));}
 catch (Exception $e) {$this->fail($index, $e->getMessage()); return;}
 $text = TaguiSikuli::text();

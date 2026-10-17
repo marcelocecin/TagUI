@@ -225,6 +225,38 @@ expect('sikuli message', str_contains($visual->captured[0], 'OculiX'), true);
 expect('sikuli no snap word', str_contains($visual->captured[0], 'cannot find '), false);
 putenv('TAGUI_SIKULI_JAR');
 
+$traced = new TaguiModern(null, false, '/tmp');
+$traced->capture = true;
+putenv('TAGUI_SIKULI_JAR=/tmp/tagui-missing-oculix.jar');
+$traced->execute_range(array('read btn.png to seen'), 0, 0, true);
+$traced_lines = array();
+foreach ($traced->captured as $row) {if ($row === 'read btn.png to seen') $traced_lines[] = $row;}
+expect('read traced once', count($traced_lines), 1);
+putenv('TAGUI_SIKULI_JAR');
+
+$chrome_root = sys_get_temp_dir() . '/tagui_chromium_' . getmypid();
+mkdir($chrome_root . '/bin', 0700, true);
+mkdir($chrome_root . '/lib/chromium', 0700, true);
+$wrapper = $chrome_root . '/bin/chromium';
+$elf = $chrome_root . '/lib/chromium/chromium';
+file_put_contents($wrapper, "#!/bin/sh\nexec true\n");
+file_put_contents($elf, "\x7fELF");
+chmod($wrapper, 0755);
+chmod($elf, 0755);
+$chrome = $chrome_root . '/bin/google-chrome';
+file_put_contents($chrome, "#!/bin/sh\nexec true\n");
+chmod($chrome, 0755);
+expect('chromium wrapper', tagui_unwrap_chromium($wrapper), realpath($elf));
+expect('chromium elf', tagui_unwrap_chromium($elf), $elf);
+expect('chrome left alone', tagui_unwrap_chromium($chrome), $chrome);
+unlink($wrapper);
+unlink($elf);
+unlink($chrome);
+rmdir($chrome_root . '/bin');
+rmdir($chrome_root . '/lib/chromium');
+rmdir($chrome_root . '/lib');
+rmdir($chrome_root);
+
 $real_dir = sys_get_temp_dir() . '/tagui_real_' . getmypid();
 mkdir($real_dir);
 file_put_contents($real_dir . '/page.html', 'x');
