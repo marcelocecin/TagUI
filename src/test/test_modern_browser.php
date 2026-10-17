@@ -19,6 +19,8 @@ symlink(dirname($page), $linked);
 $page_url = 'file://' . $linked . '/steps_page.html';
 file_put_contents($flow, implode("\n", array(
 $page_url,
+'wait for h1',
+'expect h1',
 'echo \'backtick-\' `title()`',
 'profile_name = "Tan Kay Chen"',
 'profile_name = profile_name.replace(/ /g,"_")',
