@@ -72,8 +72,9 @@ expect('not code echo', tagui_is_code('echo "hi"'), false);
 $generated = tagui_steps_javascript();
 expect('js has click alias', str_contains($generated, 'click '), true);
 expect('js has aria-label', str_contains($generated, 'aria-label'), true);
-expect('header uses shared intent', str_contains(file_get_contents(dirname(__DIR__) . '/tagui_header.js'), 'tagui_keyword_intent'), true);
-expect('header uses shared locator', str_contains(file_get_contents(dirname(__DIR__) . '/tagui_header.js'), 'tagui_locator_attributes'), true);
+$header = file_get_contents(dirname(__DIR__) . '/tagui_header.js');
+expect('header keeps tebelorg tx', str_contains($header, "if (casper.exists(xps666('//*[@id=\"'+locator+'\"]'))) return xps666('//*[@id=\"'+locator+'\"]');"), true);
+expect('header is not the shared block', str_contains($header, 'generated from tagui_steps.php'), false);
 
 $loop = new TaguiModern(null, true, '/tmp');
 $loop->capture = true;

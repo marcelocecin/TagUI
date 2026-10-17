@@ -68,7 +68,7 @@ The banner is followed by a space and a backspace (`\n \b`), which paints a prom
 
 Results come back through `dump EXPR to rpa_python.txt` (`url()`, `title()`, `exist('sel').toString()`, `read X to read_result`). `close()` echoes a finished marker and then `done`, and waits for the process to exit. `check`, `frame`, and `popup` are rejected in live mode because they open a block the single-line reader cannot see.
 
-On this branch, live mode in `tagui_parse.php` is one `casper.then` per line. The copy published for RPA-Python still uses a blocking `while (true)` around `sys.stdin.readLine()`. That loop never returns to Casper, so `wait` and `run` queued inside it do not run until `done`. The local change is the one RPA-Python needs, and it is not in the Tump overlay yet.
+Classic live mode is the tebelorg loop: one `casper.then` that blocks on `while (true)` and `sys.stdin.readLine()` until a line starts with `done`. RPA-Python's published client depends on that loop. `wait` and `run` typed inside it are queued and do not run until `done`, which is the tebelorg behavior. Modern live mode is separate: the PHP engine reads one line at a time, so `wait` and `run` finish before the next line.
 
 `src/tagui_mcp` speaks the same banner. `LiveSession` writes a flow that contains `live`, starts `tagui`, reads until the banner, then sends a step plus an `echo TAGUI_MCP_END_*` marker. `dump` writes an expression to a file. `reap_tagui_chrome` kills the helper on port 9222, `tagui_user_profile`, and `tagui_chrome.php`.
 
@@ -93,8 +93,8 @@ Compared on 16 Oct 2026, those files against `rpa_python` at `35cfc42` (before t
 | `tagui.sikuli/tagui.py` | 1.000 | identical |
 | `tagui.cmd` | 0.9986 | local adds a comment that Windows still forwards only arg2–arg9 and that the MCP server uses `TAGUI_PARAM_n` |
 | `tagui` | 0.9655 | Tump joins `$2`–`$9` into one string and only scans those slots for a `.csv`. Local forwards `"${@:2}"` separately (spaces, and arguments past `$9`) and treats any remaining `.csv` as the datatable |
-| `tagui_header.js` | 0.9738 | local adds `p1`–`p16` with CLI-over-`TAGUI_PARAM_n`, `sq()` so selectors survive quotes, numeric `wait` in live mode, clearer `check` / `frame` / `popup` errors, and `run` via `casper.waitForExec`. Tump's live `wait` says waiting is not relevant, and its live `run` says the step is not supported |
-| `tagui_parse.php` | 0.9804 | local adds `csv_row_count()` so PHP 8 does not `count(false)` at EOF, snaps the page before a missing-element exit, and uses one `casper.then` per live line instead of Tump's blocking `while` |
+| `tagui_header.js` | matches tebelorg `7ecc6ab` | classic mode emits the tebelorg header. `p1`–`p16` and the numeric live `wait` stay in the modern engine |
+| `tagui_parse.php` | `csv_row_count()` only | PHP 8 used to throw `TypeError` on `count(false)` at CSV EOF. `end_tx()` and the live stdin loop match tebelorg again |
 
 Local `rpa_python` is ahead of the Tump overlay. Nothing in those seven files is a feature this branch lacks, except the runtime string patches RPA-Python applies itself after install (turbo mode, macOS PhantomJS and `python3` shebangs). This proof of concept then adds a `tagui_modern_profile_` kill loop to `end_processes` and `end_processes.cmd`, so those two files now differ from Tump for that reason only.
 
@@ -113,7 +113,7 @@ The constraints that matter for an upstream-acceptable change:
 | Playwright (Python or Node) | a maintained browser driver, auto-waiting, traces | new runtime and a large browser download. The live contract can be preserved, but every step is reimplemented and the install story changes. RPA-Python would grow a second dependency stack |
 | Node + `chrome-remote-interface` or Puppeteer | close to what `chrome.*` already does | Node becomes mandatory. TagUI comments rejected that for the Chrome bridge |
 | Python CDP (the RPA-Python process drives Chrome itself) | no Casper inside the Python API | breaks `tagui flow.tag` for everyone who does not use RPA-Python, and splits one language across two engines |
-| PHP CDP, opt-in flag (this engine) | PHP, which is already required; the vendored websocket client; the live banner; RPA-Python's `send` / `dump` / `done` unchanged | Firefox and `test` / xUnit stay on the CasperJS engine. `js` runs in the page, so Casper objects are absent. The step table is shared through `src/tagui_steps.php` |
+| PHP CDP, opt-in flag (this engine) | PHP, which is already required; the vendored websocket client; the live banner; RPA-Python's `send` / `dump` / `done` unchanged | Firefox and `test` / xUnit stay on the CasperJS engine. `js` runs in the page, so Casper objects are absent. The modern engine reads the step table from `src/tagui_steps.php`. Classic mode keeps tebelorg's keyword checks |
 
 ## Recommendation
 
@@ -126,7 +126,7 @@ Reasons:
 - Chrome and Edge ship native builds for Apple Silicon. The engine does not download PhantomJS.
 - A flag lets maintainers try the engine on real flows without changing the default that existing users and the Tump zip expect.
 
-Keyword aliases, the code-step predicate, and locator attribute order live in `src/tagui_steps.php`. The parser and the modern engine load that file. The parser also writes the same functions into every generated CasperJS script, and `tagui_header.js` calls them from `tx()`, `check_tx()`, `get_intent()`, and `is_code()`.
+Keyword aliases, the code-step predicate, and locator attribute order live in `src/tagui_steps.php`. The modern engine loads that file. Classic mode keeps tebelorg's keyword checks inside `tagui_parse.php` and `tagui_header.js`, so the Casper script for the official suite matches the pinned parser.
 
 ### Phased migration
 

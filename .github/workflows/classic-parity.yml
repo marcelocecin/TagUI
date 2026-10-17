@@ -1,0 +1,25 @@
+name: classic-parity
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+      - name: Classic parse parity
+        run: php src/test/classic_parity.php
+      - name: Install CasperJS when the packages still build
+        continue-on-error: true
+        run: |
+          npm install --no-save --prefix "$RUNNER_TEMP/casper" phantomjs-prebuilt casperjs
+          echo "$RUNNER_TEMP/casper/node_modules/.bin" >> "$GITHUB_PATH"
+      - name: RPA-Python live mode
+        env:
+          OPENSSL_CONF: /dev/null
+        run: php src/test/classic_live.php

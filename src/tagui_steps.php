@@ -1,9 +1,11 @@
 <?php
 
 /* SHARED STEP TABLE AND LOCATOR ORDER FOR TAGUI
-   The parser, the CasperJS header, and the modern Chrome engine all read this
-   file. Keyword aliases and the locator attribute order live here once.
-   tagui_steps_javascript() is prepended to every generated CasperJS script. */
+   The modern engine reads this file. Keyword aliases and the locator
+   attribute order live here once. Classic Casper mode keeps tebelorg's own
+   keyword checks and header text, so a generated script matches that parser.
+   tagui_steps_javascript() is the same table as a script. The classic parser
+   does not prepend it. */
 
 function tagui_locator_attributes() {
 return array('id', 'name', 'class', 'title', 'aria-label', 'text', 'href');}

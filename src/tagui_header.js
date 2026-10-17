@@ -8,20 +8,10 @@
 // xpath for object identification
 var xps666 = require('casper').selectXPath;
 
-// assign parameters to p1-p16. CLI values win. TAGUI_PARAM_n carries values that
-// do not fit the shell argument list (spaces, or more inputs than the shell forwards).
-var tagui_system = require('system');
-function tagui_param(cli_index, env_name) {
-var from_cli = casper.cli.raw.get(cli_index);
-if (from_cli !== undefined && from_cli !== null && (from_cli + '') !== '') return from_cli;
-if (tagui_system.env[env_name] !== undefined && tagui_system.env[env_name] !== '') return tagui_system.env[env_name];
-return from_cli;}
-var p1 = tagui_param(0,'TAGUI_PARAM_1'); var p2 = tagui_param(1,'TAGUI_PARAM_2'); var p3 = tagui_param(2,'TAGUI_PARAM_3');
-var p4 = tagui_param(3,'TAGUI_PARAM_4'); var p5 = tagui_param(4,'TAGUI_PARAM_5'); var p6 = tagui_param(5,'TAGUI_PARAM_6');
-var p7 = tagui_param(6,'TAGUI_PARAM_7'); var p8 = tagui_param(7,'TAGUI_PARAM_8'); var p9 = tagui_param(8,'TAGUI_PARAM_9');
-var p10 = tagui_param(9,'TAGUI_PARAM_10'); var p11 = tagui_param(10,'TAGUI_PARAM_11'); var p12 = tagui_param(11,'TAGUI_PARAM_12');
-var p13 = tagui_param(12,'TAGUI_PARAM_13'); var p14 = tagui_param(13,'TAGUI_PARAM_14'); var p15 = tagui_param(14,'TAGUI_PARAM_15');
-var p16 = tagui_param(15,'TAGUI_PARAM_16');
+// assign parameters to p1-p9 variables
+var p1 = casper.cli.raw.get(0); var p2 = casper.cli.raw.get(1); var p3 = casper.cli.raw.get(2);
+var p4 = casper.cli.raw.get(3); var p5 = casper.cli.raw.get(4); var p6 = casper.cli.raw.get(5);
+var p7 = casper.cli.raw.get(6); var p8 = casper.cli.raw.get(7); var p9 = casper.cli.raw.get(8);
 
 // save start time to measure execution time
 var automation_start_time = Date.now(); casper.echo('\nSTART - automation started - ' + Date().toLocaleString());
@@ -192,25 +182,45 @@ return front_script_line_return+script_line.trim()+back_script_line_return;}
 function is_xpath_selector(selector) {if (selector.length == 0) return false;
 if ((selector.indexOf('/') == 0) || (selector.indexOf('(') == 0)) return true; return false;}
 
-// locator attribute order comes from tagui_steps.php (tagui_locator_attributes)
+// for finding best match for given locator
 function tx(locator) {if (is_xpath_selector(locator)) return xps666(locator);
 if (casper.exists(locator)) return locator; // check for css locator
-var attrs = tagui_locator_attributes; var i;
-for (i = 0; i < attrs.length; i++) {
-var exact = tagui_locator_xpath(locator, attrs[i], false);
-if (casper.exists(xps666(exact))) return xps666(exact);
-var loose = tagui_locator_xpath(locator, attrs[i], true);
-if (casper.exists(xps666(loose))) return xps666(loose);}
+// first check for exact match then check for containing string
+if (casper.exists(xps666('//*[@id="'+locator+'"]'))) return xps666('//*[@id="'+locator+'"]');
+if (casper.exists(xps666('//*[contains(@id,"'+locator+'")]'))) return xps666('//*[contains(@id,"'+locator+'")]');
+if (casper.exists(xps666('//*[@name="'+locator+'"]'))) return xps666('//*[@name="'+locator+'"]');
+if (casper.exists(xps666('//*[contains(@name,"'+locator+'")]'))) return xps666('//*[contains(@name,"'+locator+'")]');
+if (casper.exists(xps666('//*[@class="'+locator+'"]'))) return xps666('//*[@class="'+locator+'"]');
+if (casper.exists(xps666('//*[contains(@class,"'+locator+'")]'))) return xps666('//*[contains(@class,"'+locator+'")]');
+if (casper.exists(xps666('//*[@title="'+locator+'"]'))) return xps666('//*[@title="'+locator+'"]');
+if (casper.exists(xps666('//*[contains(@title,"'+locator+'")]'))) return xps666('//*[contains(@title,"'+locator+'")]');
+if (casper.exists(xps666('//*[@aria-label="'+locator+'"]'))) return xps666('//*[@aria-label="'+locator+'"]');
+if (casper.exists(xps666('//*[contains(@aria-label,"'+locator+'")]'))) return xps666('//*[contains(@aria-label,"'+locator+'")]');
+if (casper.exists(xps666('//*[text()="'+locator+'"]'))) return xps666('//*[text()="'+locator+'"]');
+if (casper.exists(xps666('//*[contains(text(),"'+locator+'")]'))) return xps666('//*[contains(text(),"'+locator+'")]');
+if (casper.exists(xps666('//*[@href="'+locator+'"]'))) return xps666('//*[@href="'+locator+'"]');
+if (casper.exists(xps666('//*[contains(@href,"'+locator+'")]'))) return xps666('//*[contains(@href,"'+locator+'")]');
 return xps666('/html');}
 
 // for checking if given locator is found
 function check_tx(locator) {if (is_xpath_selector(locator))
 {if (casper.exists(xps666(locator))) return true; else return false;}
 if (casper.exists(locator)) return true; // check for css locator
-var attrs = tagui_locator_attributes; var i;
-for (i = 0; i < attrs.length; i++) {
-if (casper.exists(xps666(tagui_locator_xpath(locator, attrs[i], false)))) return true;
-if (casper.exists(xps666(tagui_locator_xpath(locator, attrs[i], true)))) return true;}
+// first check for exact match then check for containing string
+if (casper.exists(xps666('//*[@id="'+locator+'"]'))) return true;
+if (casper.exists(xps666('//*[contains(@id,"'+locator+'")]'))) return true;
+if (casper.exists(xps666('//*[@name="'+locator+'"]'))) return true;
+if (casper.exists(xps666('//*[contains(@name,"'+locator+'")]'))) return true;
+if (casper.exists(xps666('//*[@class="'+locator+'"]'))) return true;
+if (casper.exists(xps666('//*[contains(@class,"'+locator+'")]'))) return true;
+if (casper.exists(xps666('//*[@title="'+locator+'"]'))) return true;
+if (casper.exists(xps666('//*[contains(@title,"'+locator+'")]'))) return true;
+if (casper.exists(xps666('//*[@aria-label="'+locator+'"]'))) return true;
+if (casper.exists(xps666('//*[contains(@aria-label,"'+locator+'")]'))) return true;
+if (casper.exists(xps666('//*[text()="'+locator+'"]'))) return true;
+if (casper.exists(xps666('//*[contains(text(),"'+locator+'")]'))) return true;
+if (casper.exists(xps666('//*[@href="'+locator+'"]'))) return true;
+if (casper.exists(xps666('//*[contains(@href,"'+locator+'")]'))) return true;
 return false;}
 
 /**
@@ -778,12 +788,105 @@ function get_intent(raw_intent) {var lc_raw_intent = raw_intent.toLowerCase();
 if (inside_py_block !== 0) return 'py'; if (inside_r_block !== 0) return 'r';
 if (inside_run_block !== 0) return 'run'; if (inside_vision_block !== 0) return 'vision';
 if (inside_js_block !== 0) return 'js'; if (inside_dom_block !== 0) return 'dom';
-// aliases and the code predicate are generated from tagui_steps.php
-var shared = (typeof tagui_keyword_intent === 'function') ? tagui_keyword_intent(raw_intent) : '';
-if (shared) return shared;
+
+if (lc_raw_intent.substr(0,7) == 'http://' || lc_raw_intent.substr(0,8) == 'https://') return 'url';
+
+// first set of conditions check for valid keywords with their parameters
+if ((lc_raw_intent.substr(0,4) == 'tap ') || (lc_raw_intent.substr(0,6) == 'click ')) return 'tap';
+if ((lc_raw_intent.substr(0,5) == 'rtap ') || (lc_raw_intent.substr(0,7) == 'rclick ')) return 'rtap';
+if ((lc_raw_intent.substr(0,5) == 'dtap ') || (lc_raw_intent.substr(0,7) == 'dclick ')) return 'dtap';
+if ((lc_raw_intent.substr(0,6) == 'hover ') || (lc_raw_intent.substr(0,5) == 'move ')) return 'hover';
+if ((lc_raw_intent.substr(0,5) == 'type ') || (lc_raw_intent.substr(0,6) == 'enter ')) return 'type';
+if ((lc_raw_intent.substr(0,7) == 'select ') || (lc_raw_intent.substr(0,7) == 'choose ')) return 'select';
+if ((lc_raw_intent.substr(0,5) == 'read ') || (lc_raw_intent.substr(0,6) == 'fetch ')) return 'read';
+if ((lc_raw_intent.substr(0,5) == 'show ') || (lc_raw_intent.substr(0,6) == 'print ')) return 'show';
+if ((lc_raw_intent.substr(0,3) == 'up ') || (lc_raw_intent.substr(0,7) == 'upload ')) return 'upload';
+if ((lc_raw_intent.substr(0,5) == 'down ') || (lc_raw_intent.substr(0,9) == 'download ')) return 'down';
+if (lc_raw_intent.substr(0,8) == 'receive ') return 'receive';
+if (lc_raw_intent.substr(0,5) == 'echo ') return 'echo';
+if (lc_raw_intent.substr(0,5) == 'save ') return 'save';
+if (lc_raw_intent.substr(0,5) == 'dump ') return 'dump';
+if (lc_raw_intent.substr(0,6) == 'write ') return 'write';
+if (lc_raw_intent.substr(0,5) == 'load ') return 'load';
+if (lc_raw_intent.substr(0,5) == 'snap ') return 'snap';
+if (lc_raw_intent.substr(0,6) == 'table ') return 'table';
+if (lc_raw_intent.substr(0,5) == 'wait ') return 'wait';
+if (lc_raw_intent.substr(0,5) == 'live ') return 'live';
+if (lc_raw_intent.substr(0,4) == 'ask ') return 'ask';
+if (lc_raw_intent.substr(0,9) == 'keyboard ') return 'keyboard';
+if (lc_raw_intent.substr(0,6) == 'mouse ') return 'mouse';
+if (lc_raw_intent.substr(0,6) == 'check ') return 'check';
+if (lc_raw_intent.substr(0,5) == 'test ') return 'test';
+if (lc_raw_intent.substr(0,6) == 'frame ') return 'frame';
+if (lc_raw_intent.substr(0,6) == 'popup ') return 'popup';
+if (lc_raw_intent.substr(0,4) == 'api ') return 'api';
+if (lc_raw_intent.substr(0,4) == 'run ') return 'run';
+if (lc_raw_intent.substr(0,4) == 'dom ') return 'dom';
+if (lc_raw_intent.substr(0,3) == 'js ') return 'js';
+if (lc_raw_intent.substr(0,2) == 'r ') return 'r';
+if (lc_raw_intent.substr(0,3) == 'py ') return 'py';
+if (lc_raw_intent.substr(0,7) == 'vision ') return 'vision';
+if (lc_raw_intent.substr(0,8) == 'timeout ') return 'timeout';
+
+// second set of conditions check for valid keywords with missing parameters
+if ((lc_raw_intent == 'tap') || (lc_raw_intent == 'click')) return 'tap';
+if ((lc_raw_intent == 'rtap') || (lc_raw_intent == 'rclick')) return 'rtap';
+if ((lc_raw_intent == 'dtap') || (lc_raw_intent == 'dclick')) return 'dtap';
+if ((lc_raw_intent == 'hover') || (lc_raw_intent == 'move')) return 'hover';
+if ((lc_raw_intent == 'type') || (lc_raw_intent == 'enter')) return 'type';
+if ((lc_raw_intent == 'select') || (lc_raw_intent == 'choose')) return 'select';
+if ((lc_raw_intent == 'read') || (lc_raw_intent == 'fetch')) return 'read';
+if ((lc_raw_intent == 'show') || (lc_raw_intent == 'print')) return 'show';
+if ((lc_raw_intent == 'up') || (lc_raw_intent == 'upload')) return 'upload';
+if ((lc_raw_intent == 'down') || (lc_raw_intent == 'download')) return 'down';
+if (lc_raw_intent == 'receive') return 'receive';
+if (lc_raw_intent == 'echo') return 'echo';
+if (lc_raw_intent == 'save') return 'save';
+if (lc_raw_intent == 'dump') return 'dump';
+if (lc_raw_intent == 'write') return 'write';
+if (lc_raw_intent == 'load') return 'load';
+if (lc_raw_intent == 'snap') return 'snap';
+if (lc_raw_intent == 'table') return 'table';
+if (lc_raw_intent == 'wait') return 'wait';
+if (lc_raw_intent == 'live') return 'live';
+if (lc_raw_intent == 'ask') return 'ask';
+if (lc_raw_intent == 'keyboard') return 'keyboard';
+if (lc_raw_intent == 'mouse') return 'mouse';
+if (lc_raw_intent == 'check') return 'check';
+if (lc_raw_intent == 'test') return 'test';
+if (lc_raw_intent == 'frame') return 'frame';
+if (lc_raw_intent == 'popup') return 'popup';
+if (lc_raw_intent == 'api') return 'api';
+if (lc_raw_intent == 'run') return 'run';
+if (lc_raw_intent == 'dom') return 'dom';
+if (lc_raw_intent == 'js') return 'js';
+if (lc_raw_intent == 'r') return 'r';
+if (lc_raw_intent == 'py') return 'py';
+if (lc_raw_intent == 'vision') return 'vision';
+if (lc_raw_intent == 'timeout') return 'timeout';
+
+// final check for recognized code before returning error
 if (is_code(raw_intent)) return 'code'; else return 'error';}
 
-function is_code(raw_intent) {return tagui_is_code(raw_intent);}
+function is_code(raw_intent) {
+// due to asynchronous waiting for element, if/for/while can work for parsing single step
+// other scenarios can be assumed to behave as unparsed javascript in casperjs context
+// to let if/for/while handle multiple steps/code use the { and } steps to define block
+if ((raw_intent.substr(0,4) == 'var ') || (raw_intent.substr(0,3) == 'do ')) return true;
+if ((raw_intent.substr(0,1) == '{') || (raw_intent.substr(0,1) == '}')) return true;
+if ((raw_intent.charAt(raw_intent.length-1) == '{') || (raw_intent.charAt(raw_intent.length-1) == '}')) return true;
+if ((raw_intent.substr(0,3) == 'if ') || (raw_intent.substr(0,4) == 'else')) return true;
+if ((raw_intent.substr(0,4) == 'for ') || (raw_intent.substr(0,6) == 'while ')) return true;
+if ((raw_intent.substr(0,7) == 'switch ') || (raw_intent.substr(0,5) == 'case ')) return true;
+if ((raw_intent.substr(0,6) == 'break;') || (raw_intent == 'break')) return true;
+if ((raw_intent.substr(0,9) == 'continue;') || (raw_intent == 'continue')) return true;
+if ((raw_intent.substr(0,7) == 'casper.') || (raw_intent.substr(0,5) == 'this.')) return true;
+if (raw_intent.substr(0,7) == 'chrome.') return true; // chrome object for chrome integration
+if (raw_intent.substr(0,5) == ('test'+'.')) return true; // avoid replacement with test option
+if ((raw_intent.substr(0,2) == '//') || (raw_intent.charAt(raw_intent.length-1) == ';')) return true;
+if (raw_intent.substr(0,9) == 'function ') return true; // function definition
+// assume = is assignment statement, kinda acceptable as this is checked at the very end
+if (raw_intent.indexOf('=') > -1) return true; return false;}
 
 function file_url(absolute_filename) { // helper function to append file:// according for opening local files
 if (!absolute_filename || absolute_filename == '') return '';
@@ -813,9 +916,6 @@ source_string = source_string.substring(0,srcpos) + "+" + source_string.substrin
 source_string = source_string.replace(/\+\+\+\+\+/g,'+'); source_string = source_string.replace(/\+\+\+\+/g,'+');
 source_string = source_string.replace(/\+\+\+/g,'+'); source_string = source_string.replace(/\+\+/g,'+');
 return source_string;} // replacing multiple variations of + to handle user typos of double spaces etc
-
-function sq(value) { // keep a selector or typed text inside a single-quoted JS string
-return String(value).replace(/\\/g,'\\\\').replace(/'/g,"\\'");}
 
 function escape_bs(input_string) { // helper function to escape backslash characters and friends
 escaped_string = input_string.replace(/\\/g,'\\\\').replace(/\'/g,'\\\'').replace(/\n/g,'\\n').replace(/\r/g,'\\r');
@@ -875,7 +975,7 @@ var params = ((raw_intent + ' ').substr(1+(raw_intent + ' ').indexOf(' '))).trim
 if (is_sikuli(params)) {var abs_params = abs_file(params); var abs_intent = raw_intent.replace(params,abs_params);
 return call_sikuli(abs_intent,abs_params);} // use sikuli visual automation as needed
 if (params == '') return "this.echo('ERROR - target missing for " + raw_intent + "')";
-else if (check_tx(params)) return "this.click(tx('" + sq(params) + "'))";
+else if (check_tx(params)) return "this.click(tx('" + params + "'))";
 else return "this.echo('ERROR - cannot find " + params + "')";}
 
 function rtap_intent(raw_intent) {raw_intent = eval("'" + escape_bs(raw_intent) + "'"); // support dynamic variables
@@ -883,7 +983,7 @@ var params = ((raw_intent + ' ').substr(1+(raw_intent + ' ').indexOf(' '))).trim
 if (is_sikuli(params)) {var abs_params = abs_file(params); var abs_intent = raw_intent.replace(params,abs_params);
 return call_sikuli(abs_intent,abs_params);} // use sikuli visual automation as needed
 if (params == '') return "this.echo('ERROR - target missing for " + raw_intent + "')";
-else if (check_tx(params)) return "this.mouse.rightclick(tx('" + sq(params) + "'))";
+else if (check_tx(params)) return "this.mouse.rightclick(tx('" + params + "'))";
 else return "this.echo('ERROR - cannot find " + params + "')";}
 
 function dtap_intent(raw_intent) {raw_intent = eval("'" + escape_bs(raw_intent) + "'"); // support dynamic variables
@@ -891,7 +991,7 @@ var params = ((raw_intent + ' ').substr(1+(raw_intent + ' ').indexOf(' '))).trim
 if (is_sikuli(params)) {var abs_params = abs_file(params); var abs_intent = raw_intent.replace(params,abs_params);
 return call_sikuli(abs_intent,abs_params);} // use sikuli visual automation as needed
 if (params == '') return "this.echo('ERROR - target missing for " + raw_intent + "')";
-else if (check_tx(params)) return "this.mouse.doubleclick(tx('" + sq(params) + "'))";
+else if (check_tx(params)) return "this.mouse.doubleclick(tx('" + params + "'))";
 else return "this.echo('ERROR - cannot find " + params + "')";}
 
 function hover_intent(raw_intent) {raw_intent = eval("'" + escape_bs(raw_intent) + "'"); // support dynamic variables
@@ -899,7 +999,7 @@ var params = ((raw_intent + ' ').substr(1+(raw_intent + ' ').indexOf(' '))).trim
 if (is_sikuli(params)) {var abs_params = abs_file(params); var abs_intent = raw_intent.replace(params,abs_params);
 return call_sikuli(abs_intent,abs_params);} // use sikuli visual automation as needed
 if (params == '') return "this.echo('ERROR - target missing for " + raw_intent + "')";
-else if (check_tx(params)) return "this.mouse.move(tx('" + sq(params) + "'))";
+else if (check_tx(params)) return "this.mouse.move(tx('" + params + "'))";
 else return "this.echo('ERROR - cannot find " + params + "')";}
 
 function type_intent(raw_intent) {raw_intent = eval("'" + escape_bs(raw_intent) + "'"); // support dynamic variables
@@ -910,16 +1010,13 @@ if (is_sikuli(param1) && param2 !== '') {
 var abs_param1 = abs_file(param1); var abs_intent = raw_intent.replace(param1,abs_param1);
 return call_sikuli(abs_intent,abs_param1);} // use sikuli visual automation as needed
 if ((param1 == '') || (param2 == '')) return "this.echo('ERROR - target/text missing for " + raw_intent + "')";
-else if (check_tx(param1))
-{var locator = sq(param1);
-if (param2.indexOf('[clear]') == 0) {if (param2.length>7) param2 = param2.substr(7); else param2 = "";
-clear_field = "this.sendKeys(tx('" + locator + "'),'',{reset: true}); ";} else clear_field = "";
-var typed = ''; var type_parts = param2.split('[enter]');
-for (var type_index = 0; type_index < type_parts.length; type_index++) {
-if (type_index > 0) typed += "',{keepFocus: true}); this.sendKeys(tx('" + locator + "'),casper.page.event.key.Enter,{keepFocus: true}); this.sendKeys(tx('" + locator + "'),'";
-typed += sq(type_parts[type_index]);}
-if (param2.indexOf('[enter]') == -1) return clear_field + "this.sendKeys(tx('" + locator + "'),'" + typed + "')";
-return clear_field + "this.sendKeys(tx('" + locator + "'),'" + typed + "',{keepFocus: true});";}
+else if (check_tx(param1)) 
+{if (param2.indexOf('[clear]') == 0) {if (param2.length>7) param2 = param2.substr(7); else param2 = "";
+clear_field = "this.sendKeys(tx('" + param1 + "'),'',{reset: true}); ";} else clear_field = "";
+if (param2.indexOf('[enter]') == -1) return clear_field + "this.sendKeys(tx('" + param1 + "'),'" + param2 + "')";
+else // special handling to send enter key events
+{param2 = param2.replace(/\[enter\]/g,"',{keepFocus: true}); this.sendKeys(tx('" + param1 + "'),casper.page.event.key.Enter,{keepFocus: true}); this.sendKeys(tx('" + param1 + "'),'");
+return clear_field + "this.sendKeys(tx('" + param1 + "'),'" + param2 + "',{keepFocus: true});";}}
 else return "this.echo('ERROR - cannot find " + param1 + "')";}
 
 function select_intent(raw_intent) {raw_intent = eval("'" + escape_bs(raw_intent) + "'"); // support dynamic variables
@@ -931,7 +1028,7 @@ var abs_param1 = abs_file(param1); var abs_intent = raw_intent.replace(param1,ab
 var abs_param2 = abs_file(param2); abs_intent = abs_intent.replace(param2,abs_param2);
 return call_sikuli(abs_intent,abs_param1);} // use sikuli visual automation as needed
 if ((param1 == '') || (param2 == '')) return "this.echo('ERROR - target/option missing for " + raw_intent + "')";
-else if (check_tx(param1)) return "var select_locator = tx('" + sq(param1) + "'); if (is_xpath_selector(select_locator.toString().replace('xpath selector: ',''))) select_locator = select_locator.toString().substring(16); this.selectOptionByValue(select_locator,'" + sq(param2) + "');";
+else if (check_tx(param1)) return "var select_locator = tx('" + param1 + "'); if (is_xpath_selector(select_locator.toString().replace('xpath selector: ',''))) select_locator = select_locator.toString().substring(16); this.selectOptionByValue(select_locator,'" + param2 + "');";
 else return "this.echo('ERROR - cannot find " + param1 + "')";}
 
 function read_intent(raw_intent) {raw_intent = eval("'" + escape_bs(raw_intent) + "'"); // support dynamic variables
@@ -943,7 +1040,7 @@ var abs_param1 = abs_file(param1); var abs_intent = raw_intent.replace(param1,ab
 return call_sikuli(abs_intent,abs_param1,param2 + ' = fetch_sikuli_text(); clear_sikuli_text();');}
 if ((param1.toLowerCase() == 'page') && (param2 !== '')) return param2 + " = this.getHTML()";
 if ((param1 == '') || (param2 == '')) return "this.echo('ERROR - target/variable missing for " + raw_intent + "')";
-else if (check_tx(param1)) return param2 + " =  this.fetchText(tx('" + sq(param1) + "')).trim()";
+else if (check_tx(param1)) return param2 + " =  this.fetchText(tx('" + param1 + "')).trim()";
 else return "this.echo('ERROR - cannot find " + param1 + "')";}
 
 function show_intent(raw_intent) {raw_intent = eval("'" + escape_bs(raw_intent) + "'"); // support dynamic variables
@@ -953,7 +1050,7 @@ var abs_params = abs_file(params); var abs_intent = raw_intent.replace(params,ab
 return call_sikuli(abs_intent,abs_params,'this.echo(fetch_sikuli_text()); clear_sikuli_text();');}
 if (params.toLowerCase() == 'page') return "this.echo('" + raw_intent + "' + ' - ' + '\\n' + this.getHTML())";
 if (params == '') return "this.echo('ERROR - target missing for " + raw_intent + "')";
-else if (check_tx(params)) return "this.echo(this.fetchText(tx('" + sq(params) + "')).trim())";else return "this.echo('ERROR - cannot find " + params + "')";}
+else if (check_tx(params)) return "this.echo(this.fetchText(tx('" + params + "')).trim())";else return "this.echo('ERROR - cannot find " + params + "')";}
 
 function upload_intent(raw_intent) {raw_intent = eval("'" + escape_bs(raw_intent) + "'"); // support dynamic variables
 var params = ((raw_intent + ' ').substr(1+(raw_intent + ' ').indexOf(' '))).trim();
@@ -1061,11 +1158,7 @@ else {if (check_tx(table_identifier(params))) return "save_table('',tx('" + tabl
 else return "this.echo('ERROR - cannot find " + table_identifier(params) + "')";}}
 
 function wait_intent(raw_intent) {raw_intent = eval("'" + escape_bs(raw_intent) + "'"); // support dynamic variables
-var params = ((raw_intent + ' ').substr(1+(raw_intent + ' ').indexOf(' '))).trim();
-if (params == '') params = '5';
-var seconds = parseFloat(params);
-if (isNaN(seconds)) return "this.echo('ERROR - live mode wait needs a number of seconds. Put element waits in a flow file.')";
-return "this.wait(" + (seconds * 1000) + ", function() {});";}
+return "this.echo('ERROR - waiting for some time is not relevant in live mode')";}
 
 function live_intent(raw_intent) {raw_intent = eval("'" + escape_bs(raw_intent) + "'"); // support dynamic variables
 return "this.echo('ERROR - you are already in live mode, type done to quit live mode')";}
@@ -1086,16 +1179,16 @@ else if (params.toLowerCase() == 'up') return call_sikuli(raw_intent,'up');
 else return "this.echo('ERROR - cannot understand step " + raw_intent + "')";}
 
 function check_intent(raw_intent) {raw_intent = eval("'" + escape_bs(raw_intent) + "'"); // support dynamic variables
-return "this.echo('ERROR - check is not supported in live mode. Save it in a flow file so the flow parser can compile the condition.')";}
+return "this.echo('ERROR - step not supported in live mode, there is no conditions language parser')";}
 
 function test_intent(raw_intent) {raw_intent = eval("'" + escape_bs(raw_intent) + "'"); // support dynamic variables
 return "this.echo('ERROR - use CasperJS tester module to professionally " + raw_intent + "\\nERROR - info at http://docs.casperjs.org/en/latest/modules/tester.html\\nERROR - support CSS selector or tx(\\'selector\\') for XPath algo by TagUI')";}
 
 function frame_intent(raw_intent) {raw_intent = eval("'" + escape_bs(raw_intent) + "'"); // support dynamic variables
-return "this.echo('ERROR - frame is not supported in live mode. It opens a block around the following steps; put it in a flow file.')";}
+return "this.echo('ERROR - step not supported in live mode, it is meant for trying single steps')";}
 
 function popup_intent(raw_intent) {raw_intent = eval("'" + escape_bs(raw_intent) + "'"); // support dynamic variables
-return "this.echo('ERROR - popup is not supported in live mode. It opens a block around the following steps; put it in a flow file.')";}
+return "this.echo('ERROR - step not supported in live mode, it is meant for trying single steps')";}
 
 function api_intent(raw_intent) {raw_intent = eval("'" + escape_bs(raw_intent) + "'"); // support dynamic variables
 var params = ((raw_intent + ' ').substr(1+(raw_intent + ' ').indexOf(' '))).trim();
@@ -1104,16 +1197,7 @@ else return "api_result = ''; api_result = call_api('" + params + "'); " +
 "try {api_json = JSON.parse(api_result);} catch(e) {api_json = JSON.parse('null');}";}
 
 function run_intent(raw_intent) {raw_intent = eval("'" + escape_bs(raw_intent) + "'"); // support dynamic variables
-if (raw_intent.toLowerCase() == 'run begin') {inside_run_block = 1; return '';}
-else if (raw_intent.toLowerCase() == 'run finish') {inside_run_block = 0; return '';}
-if (inside_run_block == 1) raw_intent = 'run ' + raw_intent;
-var params = ((raw_intent + ' ').substr(1+(raw_intent + ' ').indexOf(' '))).trim();
-if (params == '') return "this.echo('ERROR - command to run missing for " + raw_intent.replace(/'/g,"\\'") + "')";
-var safe = params.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
-return "this.waitForExec('" + safe + "', null, function(response) {run_result = ''; " +
-"run_result = ((response.data.stdout || '').trim() || (response.data.stderr || '').trim()); " +
-"run_json = response.data; if (run_result) this.echo(run_result);}, function() {" +
-"this.echo('ERROR - command to run exceeded '+(casper.options.waitTimeout/1000).toFixed(1)+'s timeout');});";}
+return "this.echo('ERROR - step not supported in live mode, as run output cannot be retrieved')";}
 
 function dom_intent(raw_intent) { // code to support dynamic variables not applicable
 if (raw_intent.toLowerCase() == 'dom begin') {inside_dom_block = 1; return '';}
