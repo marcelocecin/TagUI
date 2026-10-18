@@ -202,10 +202,76 @@ TaguiHelpers::shutdown();
 
 $r = new TaguiModern(null, true, '/tmp');
 $r->capture = true;
-putenv('TAGUI_RSCRIPT=');
+putenv('TAGUI_RSCRIPT=/tmp/tagui-missing-Rscript');
 $r->execute_range(array('r print(1)'), 0, 0, true);
 expect('r missing', $r->stopped, true);
 expect('r message', str_contains($r->captured[0], 'Rscript'), true);
+putenv('TAGUI_RSCRIPT');
+TaguiHelpers::shutdown();
+
+expect('r join paste', tagui_r_join("a='1';b='2'\nd=paste(a,b,sep='')\ncat(d)"), "a='1';b='2'; d=paste(a,b,sep=''); cat(d); ");
+expect('r join if', tagui_r_join("if (TRUE) {\ncat('TRUE1')\ncat('TRUE2')\n}"), "if (TRUE) {; cat('TRUE1'); cat('TRUE2'); }; ");
+expect('r join bare', tagui_r_join("if (FALSE)\ncat('BARE')"), "if (FALSE); cat('BARE'); ");
+expect('r join comment', tagui_r_join("x=1 # comment\ncat('AFTER')"), "x=1 # comment; cat('AFTER'); ");
+expect('r join semi', tagui_r_join("a=1;\nb=2"), "a=1; b=2; ");
+
+$rok = new TaguiModern(null, true, '/tmp');
+$rok->capture = true;
+$rlines = array(
+'r a=1;b=2',
+'r c=a+b',
+'r cat(c)',
+'echo r_result',
+'echo r_json',
+'r begin',
+"a='1';b='2'",
+"d=paste(a,b,sep='')",
+'cat(d)',
+'r finish',
+'echo r_result',
+'r begin',
+'if (TRUE) {',
+"cat('TRUE1')",
+"cat('TRUE2')",
+'}',
+'r finish',
+'echo r_result',
+'echo r_json',
+'r begin',
+"\t\tif (FALSE) {",
+"\tcat('FALSE1')",
+"cat('FALSE2')",
+"\t\t\t}",
+'r finish',
+'echo r_result',
+'r 1+2',
+'echo r_result',
+'r print(1); print(2)',
+'echo r_result',
+'r begin',
+'x=1 # comment',
+"cat('AFTER')",
+'r finish',
+'echo r_result',
+'r cat(x)',
+'echo r_result',
+"r message('secret')",
+'echo r_result',
+"r cat('{\"n\":3}')",
+'echo r_result');
+$rok->execute_range($rlines, 0, count($rlines) - 1, true);
+expect('r results', $rok->captured, array('3', '3', '12', 'TRUE1TRUE2', '', '', '', '[1] 1 [1] 2', '', '1', '', '{"n":3}'));
+expect('r json object', $rok->vars['r_json'], array('n' => 3));
+expect('r ran', $rok->stopped, false);
+TaguiHelpers::shutdown();
+
+$rbad = new TaguiModern(null, true, '/tmp');
+$rbad->capture = true;
+$rbad_lines = array('r begin', 'if (FALSE)', "cat('BARE')", 'r finish', 'echo r_result');
+$rbad->execute_range($rbad_lines, 0, count($rbad_lines) - 1, true);
+expect('r error stops', $rbad->stopped, true);
+expect('r error text', str_contains($rbad->captured[0], 'cannot execute R command(s)'), true);
+expect('r error clears', $rbad->vars['r_result'], '');
 TaguiHelpers::shutdown();
 
 $zh = tagui_translate_lines(array('输入 search-box 为 github', '如果 cupcakes 多过或等于 12'), 'chinese');

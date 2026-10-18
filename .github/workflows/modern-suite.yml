@@ -1,0 +1,27 @@
+name: modern-suite
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+      - name: Install R and Chrome
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y r-base-core
+          wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt-get install -y /tmp/chrome.deb
+          Rscript --version
+          google-chrome-stable --version
+      - name: Official suite on the modern engine
+        env:
+          TAGUI_CHROME_ISOLATED: "1"
+        run: php src/test/test_modern_suite.php

@@ -1393,7 +1393,7 @@ function run_language($kind, $body, $index) {
 $body = tagui_dedent($body);
 if ($kind === 'js') $this->js_run($body, $index);
 else if ($kind === 'py') $this->py_run($body, $index);
-else if ($kind === 'r') $this->r_run($body, $index);
+else if ($kind === 'r') $this->r_run(tagui_r_join($body), $index);
 else if ($kind === 'vision') $this->visual_gap($index, 'vision ' . $body);
 else if ($kind === 'dom') $this->dom_run($body, $index);
 else $this->fail($index, 'cannot run ' . $kind);}
@@ -1441,10 +1441,15 @@ $out = 'ERROR - ' . $err;}
 $this->remember_external('py', $out);}
 
 function r_run($code, $index) {
-try {$out = trim(TaguiHelpers::r($code, $this->timeout));}
-catch (Exception $e) {$this->fail($index, $e->getMessage()); return;}
-$out = str_replace("\\n", "\n", $out);
-$this->remember_external('r', trim($out));}
+if (trim((string)$code) === '') {$this->fail($index, 'R command(s) missing for r'); return;}
+try {$out = TaguiHelpers::r($code, $this->timeout);}
+catch (Exception $e) {
+$this->remember_external('r', '');
+$message = $e->getMessage();
+if (!str_contains($message, 'Rscript')) $message = 'cannot execute R command(s). ' . $message;
+$this->fail($index, $message);
+return;}
+$this->remember_external('r', trim((string)$out));}
 
 function remember_external($kind, $out) {
 $this->vars[$kind . '_result'] = $out;

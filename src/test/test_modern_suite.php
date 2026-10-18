@@ -14,7 +14,12 @@
    xpath [undefined] because slices dropped variable = 5 (8), and mouse_xy
    without a Sikuli jar (8).
 
-   TAGUI_SUITE_PROBE=1 runs only the popup, frame, receive, and dom checks. */
+   TAGUI_SUITE_PROBE=1 runs only the popup, frame, receive, and dom checks.
+
+   read page stores the page HTML in variable. The later index clicks still
+   name variable, and the fixture's fifth #test button is index 5, so the
+   executed copy assigns variable = 5 on the line before each of those clicks.
+   The original positive_test file is not edited. */
 
 $root = dirname(__DIR__, 2);
 $tagui = $root . '/src/tagui';
@@ -89,6 +94,14 @@ if (preg_match('#^https?://#i', $trim)) return true;
 if (str_contains($trim, 'dummytestsite.com') || str_contains($trim, 'yahoo.com') || str_contains($trim, 'google.com')) return true;
 return false;}
 
+function suite_r_section($section) {
+$sec = strtolower(trim($section));
+return $sec === 'test r' || str_starts_with($sec, 'test r ');}
+
+function suite_index_click($line) {
+$trim = trim($line);
+return $trim === 'click (//*[@id="test"])[\'+variable+\']' || $trim === 'click (//*[@id="test"])[`variable`]';}
+
 function engine_section($section) {
 $sec = strtolower($section);
 foreach (array('popup', 'frame', 'receive', 'dom', 'mouse_xy') as $word) {
@@ -101,7 +114,7 @@ $sec = strtolower($section);
 if (str_starts_with($sec, 'test {} while loop simple') && $low !== 'number = 1') {
 return 'suite while never changes number, so the loop does not end';}
 if ($low === 'live' || str_starts_with($low, 'live ')) return 'interactive live mode reads stdin until done';
-if (!$tools['r'] && (str_starts_with($sec, 'test r') || preg_match('/^r(\s|$)/', $low))) return 'Rscript is not installed';
+if (!$tools['r'] && (suite_r_section($sec) || preg_match('/^r(\s|$)/', $low))) return 'Rscript is not installed';
 if (!$tools['py'] && str_starts_with($sec, 'test py')) return 'Python is not installed';
 if (needs_screen_target($trim) || preg_match('/^vision(\s|$)/', $low)) {
 return 'the suite does not put this image or coordinate on screen';}
@@ -289,6 +302,7 @@ if ($step['skip'] !== '') {
 $flow_lines[] = '// SKIP ' . $step['skip'] . ' | ' . $trim;
 continue;}
 $written = rewrite_external($step['raw'], $base, $host);
+if (suite_index_click($written)) $flow_lines[] = 'variable = 5';
 $flow_lines[] = $written;
 if ($step['step']) $flow_index[count($flow_lines)] = $offset;}
 $flow = $work . '/positive_test_modern';
@@ -342,6 +356,7 @@ note('text contains automation', str_contains($result['text'], 'page text contai
 note('popup subframe', str_contains($result['text'], 'test popup with subframe'), $result['text']);
 note('frame subframe', str_contains($result['text'], 'test subframe'), $result['text']);
 note('receive report', str_contains($received, 'month-report'), $received);
+if ($tools['r']) note('r result', str_contains($result['text'], 'TRUE1TRUE2'), $result['text']);
 $null_flow = $work . '/null_flow';
 file_put_contents($null_flow, $base . "/org/page.html\ndom document.querySelector('#missing p').focus()\n");
 $null = run_flow($tagui, $null_flow, $work, $work . '/bin');
