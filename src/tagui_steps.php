@@ -296,7 +296,8 @@ $url = $this->absolute_url($url);
 $file = $this->abs_file($file);
 try {$bytes = $this->http_get($url);
 if ($bytes === null) {$this->fail($index, 'cannot download ' . $url); return;}
-if (file_put_contents($file, $bytes) === false) $this->fail($index, 'cannot save ' . $file);}
+if (file_put_contents($file, $bytes) === false) {$this->fail($index, 'cannot save ' . $file); return;}
+if ($this->chrome !== null && method_exists($this->chrome, 'note_network')) $this->chrome->note_network($url);}
 catch (Exception $e) {$this->fail($index, $e->getMessage());}}
 
 function download_directory($folder, $index) {

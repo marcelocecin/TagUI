@@ -456,7 +456,7 @@ function evaluate($expression) {
 $this->commands[] = array('evaluate', $expression);
 return array('x' => 8.0, 'y' => 9.0);}
 function click_at($x, $y, $button, $clicks, $may_open = false) {$this->clicks[] = array($x, $y, $button, $clicks);}
-function command($method, $params) {
+function command($method, $params, $timeout = 30) {
 $this->commands[] = array($method, $params);
 return array();}}
 $recorder = new RecordingChrome();
