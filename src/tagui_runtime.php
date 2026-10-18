@@ -304,8 +304,20 @@ while True:
     sys.stdout.flush()
 PY;}
 
+function tagui_r_join($body) {
+$lines = preg_split('/\r\n|\n|\r/', (string)$body);
+if (!is_array($lines)) return '';
+$joined = '';
+foreach ($lines as $line) {
+$indent = str_replace(ltrim($line), '', $line);
+$trim = trim($line);
+if ($trim === '') continue;
+$joined .= $indent . $trim . '[END_OF_LINE]';}
+return str_replace(';; ', '; ', str_replace('[END_OF_LINE]', '; ', $joined));}
+
 function tagui_r_script() {
 return <<<'R'
+sink(file(nullfile(), open = "w"), type = "message")
 con <- file("stdin", open = "r")
 repeat {
   path <- readLines(con, n = 1, warn = FALSE)
@@ -316,9 +328,11 @@ repeat {
   err <- ""
   out <- ""
   ok <- tryCatch({
-    out <<- paste(capture.output(sys.source(path, envir = .GlobalEnv)), collapse = "\\n")
+    code <- paste(readLines(path, warn = FALSE), collapse = "\n")
+    printed <- capture.output(invisible(eval(parse(text = code), envir = .GlobalEnv)))
+    if (length(printed) == 0) out <<- "" else out <<- paste(trimws(printed), collapse = " ")
     TRUE
-  }, error = function(e) { err <<- gsub("[\r\n]", " ", conditionMessage(e)); FALSE })
+  }, error = function(e) { err <<- gsub("[\r\n]+", " ", conditionMessage(e)); FALSE })
   if (ok) cat("OK ", out, "\n", sep = "") else cat("ERR ", err, "\n", sep = "")
   flush.console()
 }

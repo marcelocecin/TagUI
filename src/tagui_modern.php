@@ -153,6 +153,7 @@ public $ws_url = '';
 public $frame_dx = 0;
 public $frame_dy = 0;
 public $network_urls = array();
+public $surface_shots = true;
 public $download_path = '';
 public $persistent_profile = false;
 private $process = null;
@@ -212,6 +213,8 @@ $scale_is_set = is_string($forced_scale) && is_numeric($forced_scale) && (float)
 if ($headless) {
 $args[] = '--force-device-scale-factor=' . ($scale_is_set ? $forced_scale : '1');}
 else if ($scale_is_set) {$args[] = '--force-device-scale-factor=' . $forced_scale;}
+$position = getenv('TAGUI_CHROME_POSITION');
+if (is_string($position) && preg_match('/^-?\d+,-?\d+$/', $position) === 1) $args[] = '--window-position=' . $position;
 if ($headless) {array_push($args, '--headless=new', '--disable-gpu');}
 if (getenv('TAGUI_CHROME_SANDBOX') !== '1') {
 array_push($args, '--no-sandbox', '--disable-dev-shm-usage');}
@@ -377,12 +380,21 @@ return $scale;}
 
 function screenshot($path, $clip) {
 $this->follow_newest_page();
-$params = array('format' => 'png', 'fromSurface' => true);
+if (!$this->surface_shots) return $this->capture_png($path, $clip, false, 15);
+try {return $this->capture_png($path, $clip, true, 8);}
+catch (RuntimeException $e) {
+if (!str_contains($e->getMessage(), 'Page.captureScreenshot')) throw $e;
+$this->surface_shots = false;
+try {$this->command('Page.bringToFront', new stdClass());} catch (Exception $ignored) {}
+return $this->capture_png($path, $clip, false, 15);}}
+
+private function capture_png($path, $clip, $from_surface, $timeout) {
+$params = array('format' => 'png', 'fromSurface' => $from_surface);
 if ($clip === null) $clip = $this->viewport_clip();
 if (is_array($clip)) {
 $clip['scale'] = 1;
 $params['clip'] = $clip;}
-$result = $this->command('Page.captureScreenshot', $params);
+$result = $this->command('Page.captureScreenshot', $params, $timeout);
 if (empty($result['data'])) return false;
 $bytes = base64_decode($result['data'], true);
 if ($bytes === false) return false;
@@ -409,14 +421,17 @@ try {$this->command('Browser.setDownloadBehavior', $allow); return;}
 catch (Exception $e) {}
 $this->command('Page.setDownloadBehavior', $allow);}
 
-function command($method, $params) {
+function command($method, $params, $timeout = 30) {
 if ($params instanceof stdClass) $encoded_params = new stdClass();
 else $encoded_params = $params;
 $this->next_id++;
 $id = $this->next_id;
 $body = json_encode(array('id' => $id, 'method' => $method, 'params' => $encoded_params));
 $this->client->send($body);
-$deadline = microtime(true) + 30;
+$wait = max(1, (float)$timeout);
+if ($this->client !== null && method_exists($this->client, 'setTimeout')) $this->client->setTimeout((int)ceil($wait));
+try {
+$deadline = microtime(true) + $wait;
 while (microtime(true) < $deadline) {
 try {$raw = $this->client->receive();}
 catch (Exception $e) {continue;}
@@ -427,13 +442,16 @@ if (isset($message['params']['response']['url'])) $net_url = (string)$message['p
 if ($net_url !== '') {
 $net_type = '';
 if (isset($message['params']['type'])) $net_type = (string)$message['params']['type'];
-$this->network_urls[] = array('url' => $net_url, 'type' => $net_type);
-if (count($this->network_urls) > 200) array_shift($this->network_urls);}}
+$this->note_network($net_url, $net_type);}}
+if (is_array($message) && isset($message['method']) && $message['method'] === 'Page.javascriptDialogOpening') {
+$this->accept_dialog();
+continue;}
 if (!is_array($message) || !isset($message['id']) || (int)$message['id'] !== $id) continue;
 if (isset($message['error'])) {
 throw new RuntimeException($method . ' failed: ' . json_encode($message['error']));}
 return isset($message['result']) ? $message['result'] : array();}
 throw new RuntimeException('timed out waiting for ' . $method);}
+finally {if ($this->client !== null && method_exists($this->client, 'setTimeout')) $this->client->setTimeout(30);}}
 
 private function wait_for_page_socket() {
 $deadline = microtime(true) + 20;
@@ -504,7 +522,15 @@ $script = "(function(){window.__tagui_roots = window.__tagui_roots || [document]
 . "for (var i = 0; i < frames.length; i++) {if (frames[i].getAttribute('name') === wanted || frames[i].id === wanted) {frame = frames[i]; break;}}"
 . "if (!frame || !frame.contentDocument) return null; var rect = frame.getBoundingClientRect();"
 . "window.__tagui_roots.push(frame.contentDocument); return {x: rect.left, y: rect.top};})()";
+$deadline = microtime(true) + max((float)$this->timeout, 1);
+$rect = null;
+do {
 $rect = $this->evaluate($script);
+if (is_array($rect) && isset($rect['x'])) break;
+$rect = null;
+if (microtime(true) >= $deadline) break;
+usleep(200000);
+} while (true);
 if (!is_array($rect)) return false;
 $this->frame_stack[] = $rect;
 $this->frame_dx += (float)$rect['x'];
@@ -560,6 +586,12 @@ $node = $this->command('DOM.requestNode', array('objectId' => $result['result'][
 if (empty($node['nodeId'])) return false;
 $this->command('DOM.setFileInputFiles', array('files' => array($filename), 'nodeId' => $node['nodeId']));
 return true;}
+
+function note_network($url, $type = 'Other') {
+$url = (string)$url;
+if ($url === '') return;
+$this->network_urls[] = array('url' => $url, 'type' => (string)$type);
+if (count($this->network_urls) > 200) array_shift($this->network_urls);}
 
 function await_network_url($keyword, $timeout) {
 $deadline = microtime(true) + max((float)$timeout, 1);
@@ -662,8 +694,22 @@ foreach ($list as $target) {
 if (!isset($target['type']) || $target['type'] !== 'page' || empty($target['webSocketDebuggerUrl'])) continue;
 if ($target['webSocketDebuggerUrl'] === $this->ws_url) continue;
 $url = isset($target['url']) ? (string)$target['url'] : '';
-if ($url !== '' && stripos($url, $keyword) !== false) return $target;}
+if ($this->popup_url_matches($url, $keyword)) return $target;}
 return null;}
+
+private function popup_url_matches($url, $keyword) {
+if ($url === '' || strcasecmp($url, 'about:blank') === 0) return false;
+if (str_starts_with($url, 'chrome://') || str_starts_with($url, 'devtools://') || str_starts_with($url, 'chrome-extension://') || str_starts_with($url, 'chrome-error://')) return false;
+return stripos($url, $keyword) !== false;}
+
+private function accept_dialog() {
+$this->next_id++;
+$body = json_encode(array(
+'id' => $this->next_id,
+'method' => 'Page.handleJavaScriptDialog',
+'params' => array('accept' => true, 'promptText' => '')));
+try {$this->client->send($body);} catch (Exception $e) {}
+}
 
 private function list_pages() {
 $context = stream_context_create(array('http' => array('timeout' => 2)));
@@ -1327,7 +1373,12 @@ $payload = json_encode($json, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 if ($payload === false) $payload = '{}';
 $script = '(function(dom_json){' . $code . '})(' . $payload . ')';
 try {$this->vars['dom_result'] = $this->chrome->evaluate($script);}
-catch (Exception $e) {$this->fail($index, $e->getMessage());}}
+catch (Exception $e) {$this->fail($index, $this->dom_failure($e->getMessage()));}}
+
+function dom_failure($message) {
+if (preg_match('/Cannot read propert(?:y|ies) of null|null is not an object|of null \(reading/i', (string)$message)) {
+return 'dom target is null. The selector did not match an element.';}
+return (string)$message;}
 
 function language_block($lines, $i, $end) {
 $header = strtolower(trim($lines[$i]));
@@ -1344,7 +1395,7 @@ function run_language($kind, $body, $index) {
 $body = tagui_dedent($body);
 if ($kind === 'js') $this->js_run($body, $index);
 else if ($kind === 'py') $this->py_run($body, $index);
-else if ($kind === 'r') $this->r_run($body, $index);
+else if ($kind === 'r') $this->r_run(tagui_r_join($body), $index);
 else if ($kind === 'vision') $this->visual_gap($index, 'vision ' . $body);
 else if ($kind === 'dom') $this->dom_run($body, $index);
 else $this->fail($index, 'cannot run ' . $kind);}
@@ -1392,10 +1443,15 @@ $out = 'ERROR - ' . $err;}
 $this->remember_external('py', $out);}
 
 function r_run($code, $index) {
-try {$out = trim(TaguiHelpers::r($code, $this->timeout));}
-catch (Exception $e) {$this->fail($index, $e->getMessage()); return;}
-$out = str_replace("\\n", "\n", $out);
-$this->remember_external('r', trim($out));}
+if (trim((string)$code) === '') {$this->fail($index, 'R command(s) missing for r'); return;}
+try {$out = TaguiHelpers::r($code, $this->timeout);}
+catch (Exception $e) {
+$this->remember_external('r', '');
+$message = $e->getMessage();
+if (!str_contains($message, 'Rscript')) $message = 'cannot execute R command(s). ' . $message;
+$this->fail($index, $message);
+return;}
+$this->remember_external('r', trim((string)$out));}
 
 function remember_external($kind, $out) {
 $this->vars[$kind . '_result'] = $out;
