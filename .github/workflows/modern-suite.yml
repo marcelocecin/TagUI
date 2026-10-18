@@ -13,9 +13,10 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: "8.3"
-      - name: Install R, Chrome, Java, and Xvfb
+      - name: Install R, Chrome, Java 17+, and Xvfb
         run: |
           sudo apt-get update
+          # OculiX 4.0.0 is Java 17 bytecode. OpenJDK 21 satisfies that. A SikuliX jar can still run on Java 8.
           sudo apt-get install -y r-base-core xvfb openjdk-21-jre
           wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
           sudo apt-get install -y /tmp/chrome.deb
@@ -24,6 +25,13 @@ jobs:
           google-chrome-stable --version
           java -version
           test "$(wc -c < /tmp/oculixide-4.0.0-linux.jar)" = "197708979"
+      - name: Logic checks and live mode
+        env:
+          TAGUI_CHROME_ISOLATED: "1"
+        run: |
+          python3 -m pip install --disable-pip-version-check --break-system-packages 'mcp>=2,<3'
+          php src/test/test_modern_logic.php
+          python3 src/test/test_modern_live.py
       - name: Official suite on the modern engine
         env:
           TAGUI_CHROME_ISOLATED: "1"
