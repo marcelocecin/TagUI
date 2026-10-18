@@ -19,13 +19,18 @@
    read page stores the page HTML in variable. The later index clicks still
    name variable, and the fixture's fifth #test button is index 5, so the
    executed copy assigns variable = 5 on the line before each of those clicks.
-   The original positive_test file is not edited. */
+   The original positive_test file is not edited.
+
+   Image and coordinate steps run when an OculiX/Sikuli jar and Xvfb are
+   available. The harness opens fixtures/visual.html on that display and
+   crops each mark into the filename the suite already uses. */
 
 $root = dirname(__DIR__, 2);
 $tagui = $root . '/src/tagui';
 $flow_source = $root . '/src/test/positive_test';
 $fixtures = $root . '/src/test/fixtures';
 require_once $root . '/src/tagui_modern.php';
+require_once __DIR__ . '/visual_images.php';
 
 $failures = 0;
 function note($label, $ok, $detail) {
@@ -78,10 +83,18 @@ foreach (array('/tmp/oculixide-4.0.0-linux.jar') as $candidate) {
 if (is_file($candidate)) return $candidate;}
 return '';}
 
+function visual_step_target($line) {
+$trim = trim($line);
+if (!preg_match('/^(tap|click|hover|move|type|enter|select|choose)\b/i', $trim, $match)) return '';
+$rest = trim(substr($trim, strlen($match[0])));
+$as = stripos($rest, ' as ');
+if ($as !== false) $rest = trim(substr($rest, 0, $as));
+return $rest;}
+
 function needs_screen_target($line) {
-if (preg_match('/\.(?:png|bmp)\b/i', $line)) return true;
-if (preg_match('/\(\s*\d+\s*,\s*\d+\s*\)/', $line)) return true;
-return false;}
+$target = visual_step_target($line);
+if ($target === '') return false;
+return tagui_is_visual($target);}
 
 function needs_sikuli($line) {
 $low = strtolower($line);
@@ -117,7 +130,8 @@ if ($low === 'live' || str_starts_with($low, 'live ')) return 'interactive live 
 if (!$tools['r'] && (suite_r_section($sec) || preg_match('/^r(\s|$)/', $low))) return 'Rscript is not installed';
 if (!$tools['py'] && str_starts_with($sec, 'test py')) return 'Python is not installed';
 if (needs_screen_target($trim) || preg_match('/^vision(\s|$)/', $low)) {
-return 'the suite does not put this image or coordinate on screen';}
+if (!$tools['sikuli']) return 'OculiX/Sikuli jar is not installed';
+if (empty($tools['display'])) return 'no display for visual steps';}
 if (!$tools['sikuli'] && (str_contains($sec, 'mouse_xy') || needs_sikuli($trim))) return 'OculiX/Sikuli jar is not installed';
 return '';}
 
@@ -213,7 +227,8 @@ if ($sikuli_jar !== '') putenv('TAGUI_SIKULI_JAR=' . $sikuli_jar);
 $tools = array(
 'r' => command_exists('Rscript'),
 'py' => command_exists('python3') || command_exists('python'),
-'sikuli' => suite_sikuli_jar() !== '');
+'sikuli' => suite_sikuli_jar() !== '',
+'display' => false);
 $port = suite_port();
 if ($port < 1) {fwrite(STDERR, "FAIL cannot reserve a port\n"); exit(1);}
 $base = 'http://127.0.0.1:' . $port;
@@ -230,10 +245,17 @@ write_png('/tmp/abc.png');
 $server_log = $work . '/server.log';
 $server = start_server($fixtures, $port, $server_log);
 if ($server === null) {fwrite(STDERR, "FAIL cannot start fixture server\n"); exit(1);}
-register_shutdown_function(function () use ($server, $work, $root) {
+$screen = new stdClass();
+$screen->chrome = null;
+$screen->xvfb = null;
+$screen->display = '';
+register_shutdown_function(function () use ($server, $work, $root, $screen) {
+if ($screen->chrome instanceof TaguiChrome) $screen->chrome->stop();
+if (is_resource($screen->xvfb)) {proc_terminate($screen->xvfb); proc_close($screen->xvfb);}
 if (is_resource($server)) {proc_terminate($server); proc_close($server);}
 suite_clean_src($root . '/src');
 @unlink('/tmp/abc.png');
+@unlink('/tmp/test.png');
 @unlink('/tmp/filename.txt');
 suite_rm($work);});
 if (!wait_server($base . '/org/page.html')) {
@@ -241,6 +263,10 @@ fwrite(STDERR, "FAIL fixture server did not answer\n" . (string)@file_get_conten
 exit(1);}
 note('fixture page', str_contains((string)file_get_contents($base . '/org/page.html'), 'About automation'), $base);
 note('fixture report', (string)@file_get_contents($base . '/report/month.txt') === "month-report\n", (string)@file_get_contents($base . '/report/month.txt'));
+if (!$probe && $tools['sikuli']) {
+$reference = getenv('TAGUI_VISUAL_REFERENCES') === '1' ? $fixtures . '/images' : '';
+$tools['display'] = visual_show($base, $work, $screen, $reference);
+note('visual page', $tools['display'], $screen->display);}
 
 if ($probe) {
 $flow = $work . '/probe_flow';

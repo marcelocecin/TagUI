@@ -13,15 +13,19 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: "8.3"
-      - name: Install R and Chrome
+      - name: Install R, Chrome, Java, and Xvfb
         run: |
           sudo apt-get update
-          sudo apt-get install -y r-base-core
+          sudo apt-get install -y r-base-core xvfb openjdk-21-jre
           wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
           sudo apt-get install -y /tmp/chrome.deb
+          wget -q -O /tmp/oculixide-4.0.0-linux.jar https://github.com/oculix-org/Oculix/releases/download/v4.0.0/oculixide-4.0.0-linux.jar
           Rscript --version
           google-chrome-stable --version
+          java -version
+          test "$(wc -c < /tmp/oculixide-4.0.0-linux.jar)" = "197708979"
       - name: Official suite on the modern engine
         env:
           TAGUI_CHROME_ISOLATED: "1"
+          TAGUI_SIKULI_JAR: /tmp/oculixide-4.0.0-linux.jar
         run: php src/test/test_modern_suite.php

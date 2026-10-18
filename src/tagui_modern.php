@@ -213,6 +213,8 @@ $scale_is_set = is_string($forced_scale) && is_numeric($forced_scale) && (float)
 if ($headless) {
 $args[] = '--force-device-scale-factor=' . ($scale_is_set ? $forced_scale : '1');}
 else if ($scale_is_set) {$args[] = '--force-device-scale-factor=' . $forced_scale;}
+$position = getenv('TAGUI_CHROME_POSITION');
+if (is_string($position) && preg_match('/^-?\d+,-?\d+$/', $position) === 1) $args[] = '--window-position=' . $position;
 if ($headless) {array_push($args, '--headless=new', '--disable-gpu');}
 if (getenv('TAGUI_CHROME_SANDBOX') !== '1') {
 array_push($args, '--no-sandbox', '--disable-dev-shm-usage');}

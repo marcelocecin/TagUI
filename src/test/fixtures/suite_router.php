@@ -10,7 +10,8 @@ $map = array(
 '/frame/main.html' => 'suite_frame_main.html',
 '/frame/sub.html' => 'suite_frame_sub.html',
 '/popup/about.html' => 'suite_popup_about.html',
-'/popup/url_keyword.html' => 'suite_popup_keyword.html');
+'/popup/url_keyword.html' => 'suite_popup_keyword.html',
+'/visual.html' => 'visual.html');
 
 $uri = isset($_SERVER['REQUEST_URI']) ? (string)$_SERVER['REQUEST_URI'] : '/';
 $path = parse_url($uri, PHP_URL_PATH);
