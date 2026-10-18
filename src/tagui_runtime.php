@@ -400,6 +400,8 @@ if ($hint !== '') $message .= ' ' . $hint;
 return $message . ' See ' . $log;}
 
 static function environment_hint($text) {
+if (str_contains($text, 'UnsupportedClassVersionError')) {
+return 'OculiX requires Java 17+; set PATH/JAVA_HOME or TAGUI_JAVA';}
 $permission = self::permission_hint($text);
 if ($permission !== '') return $permission;
 if (str_contains($text, 'HeadlessException') || str_contains($text, 'running in headless environment')) {
@@ -460,6 +462,16 @@ $path = $src . DIRECTORY_SEPARATOR . $relative;
 if (is_file($path)) return $path;}
 return '';}
 
+static function java_binary() {
+$chosen = getenv('TAGUI_JAVA');
+if (is_string($chosen) && trim($chosen) !== '') return trim($chosen);
+$home = getenv('JAVA_HOME');
+if (is_string($home) && trim($home) !== '') {
+$name = DIRECTORY_SEPARATOR === '\\' ? 'java.exe' : 'java';
+$candidate = rtrim($home, "/\\") . DIRECTORY_SEPARATOR . 'bin' . DIRECTORY_SEPARATOR . $name;
+if (is_file($candidate)) return $candidate;}
+return 'java';}
+
 static function run($line, $timeout) {
 self::start($timeout);
 self::$count++;
@@ -494,7 +506,7 @@ static function start($timeout) {
 if (self::alive()) return;
 $jar = self::jar();
 if ($jar === '') {
-throw new RuntimeException('visual step needs OculiX or SikuliX. Set TAGUI_SIKULI_JAR to oculixide.jar (Java 11 or newer). The engine then runs src/tagui.sikuli through that jar. https://github.com/oculix-org/Oculix');}
+throw new RuntimeException('visual step needs OculiX or SikuliX. Set TAGUI_SIKULI_JAR to oculixide.jar (Java 17 or newer; a SikuliX 1.1/2 jar can still run on Java 8). The engine then runs src/tagui.sikuli through that jar. https://github.com/oculix-org/Oculix');}
 $src = dirname(__FILE__);
 $log = self::log_path();
 @unlink($src . '/tagui.sikuli/tagui_sikuli.out');
@@ -503,8 +515,9 @@ $descriptor = array(
 0 => array('file', DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null', 'r'),
 1 => array('file', $log, 'a'),
 2 => array('file', $log, 'a'));
-$process = proc_open(array('java', '-jar', $jar, '-r', $src . '/tagui.sikuli'), $descriptor, $pipes, $src);
-if (!is_resource($process)) throw new RuntimeException('cannot start java -jar ' . $jar);
+$java = self::java_binary();
+$process = proc_open(array($java, '-jar', $jar, '-r', $src . '/tagui.sikuli'), $descriptor, $pipes, $src);
+if (!is_resource($process)) throw new RuntimeException('cannot start ' . $java . ' -jar ' . $jar . '. Set PATH, JAVA_HOME, or TAGUI_JAVA.');
 self::$process = $process;
 self::$count = 0;
 $deadline = microtime(true) + max(90, (float)$timeout);

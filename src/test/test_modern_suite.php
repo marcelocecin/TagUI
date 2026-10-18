@@ -23,7 +23,13 @@
 
    Image and coordinate steps run when an OculiX/Sikuli jar and Xvfb are
    available. The harness opens fixtures/visual.html on that display and
-   crops each mark into the filename the suite already uses. */
+   crops each mark into the filename the suite already uses.
+
+   The official live step reads stdin. The harness feeds echo, a click on
+   the fixture page, an assignment, and done, so that step finishes.
+   The simple while loop stays skipped: its body never changes number.
+   Classic parses that loop as a Casper while with the same body, so it
+   would not finish either. */
 
 $root = dirname(__DIR__, 2);
 $tagui = $root . '/src/tagui';
@@ -125,8 +131,7 @@ function skip_reason($trim, $section, $tools) {
 $low = strtolower($trim);
 $sec = strtolower($section);
 if (str_starts_with($sec, 'test {} while loop simple') && $low !== 'number = 1') {
-return 'suite while never changes number, so the loop does not end';}
-if ($low === 'live' || str_starts_with($low, 'live ')) return 'interactive live mode reads stdin until done';
+return 'official test loop never terminates; classic would hang too';}
 if (!$tools['r'] && (suite_r_section($sec) || preg_match('/^r(\s|$)/', $low))) return 'Rscript is not installed';
 if (!$tools['py'] && str_starts_with($sec, 'test py')) return 'Python is not installed';
 if (needs_screen_target($trim) || preg_match('/^vision(\s|$)/', $low)) {
@@ -197,7 +202,7 @@ if (is_string($body) && str_contains($body, 'id="header"')) return true;
 usleep(100000);}
 return false;}
 
-function run_flow($tagui, $flow, $work, $path_prefix) {
+function run_flow($tagui, $flow, $work, $path_prefix, $stdin = null) {
 $saved = getenv('PATH');
 if (!is_string($saved)) $saved = '';
 putenv('PATH=' . $path_prefix . PATH_SEPARATOR . $saved);
@@ -205,6 +210,9 @@ putenv('TAGUI_CHROME_ISOLATED=1');
 putenv('tagui_web_browser=headless');
 $command = escapeshellarg($tagui) . ' ' . escapeshellarg($flow) . ' headless modern quiet';
 $descriptor = array(1 => array('pipe', 'w'), 2 => array('pipe', 'w'));
+if (is_string($stdin)) {
+file_put_contents($work . '/suite_stdin.txt', $stdin);
+$descriptor[0] = array('file', $work . '/suite_stdin.txt', 'r');}
 $process = proc_open($command, $descriptor, $pipes, $work);
 if (!is_resource($process)) {putenv('PATH=' . $saved); return array('code' => 1, 'text' => 'cannot start tagui');}
 $stdout = stream_get_contents($pipes[1]);
@@ -333,7 +341,8 @@ $flow_lines[] = $written;
 if ($step['step']) $flow_index[count($flow_lines)] = $offset;}
 $flow = $work . '/positive_test_modern';
 file_put_contents($flow, implode("\n", $flow_lines) . "\n");
-$result = run_flow($tagui, $flow, $work, $work . '/bin');
+$live_stdin = "echo suite-live-ok\n" . $base . "/org/page.html\nclick #header\nlive_seen = 1\necho live_seen\ndump live_seen to live_seen.txt\ndone\n";
+$result = run_flow($tagui, $flow, $work, $work . '/bin', $live_stdin);
 $error_line = 0;
 if (preg_match('/ERROR - \[LINE (\d+)\]/', $result['text'], $match)) $error_line = (int)$match[1];
 $counts = array('a' => array('pass' => 0, 'fail' => 0, 'skip' => 0), 'b' => array('pass' => 0, 'fail' => 0, 'skip' => 0), 'c' => array('pass' => 0, 'fail' => 0, 'skip' => 0), 'core' => array('pass' => 0, 'fail' => 0, 'skip' => 0));
@@ -383,6 +392,10 @@ note('popup subframe', str_contains($result['text'], 'test popup with subframe')
 note('frame subframe', str_contains($result['text'], 'test subframe'), $result['text']);
 note('receive report', str_contains($received, 'month-report'), $received);
 if ($tools['r']) note('r result', str_contains($result['text'], 'TRUE1TRUE2'), $result['text']);
+$live_dump = is_file($work . '/live_seen.txt') ? trim((string)file_get_contents($work . '/live_seen.txt')) : '';
+note('live echo', str_contains($result['text'], 'suite-live-ok'), $result['text']);
+note('live assignment', $live_dump === '1', $live_dump);
+note('live click', !str_contains($result['text'], 'ERROR -'), $result['text']);
 $null_flow = $work . '/null_flow';
 file_put_contents($null_flow, $base . "/org/page.html\ndom document.querySelector('#missing p').focus()\n");
 $null = run_flow($tagui, $null_flow, $work, $work . '/bin');
