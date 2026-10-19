@@ -94,6 +94,37 @@ Project config (`.cursor/mcp.json`) or the global MCP settings:
 
 The `python3 -m tagui_mcp` form above works the same way in Cursor. Paths must be absolute.
 
+## Streamable HTTP with a bearer token
+
+stdio is the default. For a machine that runs unattended (a service that starts on boot, reached through an SSH tunnel), the same server can speak Streamable HTTP:
+
+```bash
+export TAGUI_MCP_TOKEN_FILE=$HOME/.config/tagui-mcp/token   # chmod 600, at least 32 characters
+tagui-mcp --transport http --host 127.0.0.1 --port 8765
+```
+
+- Every HTTP request must send `Authorization: Bearer <token>`. A missing or wrong token gets `401`, and the request never reaches the MCP app. The comparison is constant time.
+- The token comes from `TAGUI_MCP_TOKEN` or from the file named by `TAGUI_MCP_TOKEN_FILE`, never from a command-line argument. The server refuses to start without one, with a token shorter than 32 characters, or when the token file is readable by group or others. It does not log the token.
+- It binds to `127.0.0.1` and refuses any other address unless `--allow-remote` is given. The connection is plain HTTP. To reach it across a network, put a TLS reverse proxy in front and keep the server on loopback.
+- The endpoint is `/mcp`. Generate a token with `python3 -c "import secrets; print(secrets.token_urlsafe(48))"`.
+
+An MCP client that supports HTTP headers connects with:
+
+```json
+{
+  "mcpServers": {
+    "tagui": {
+      "url": "http://127.0.0.1:8765/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}
+```
+
+Use a dedicated `TAGUI_CHROME_PROFILE` for the service, not a profile that another TagUI install or a scheduled run also uses. The server stops a Chrome that was started on exactly that profile when a session ends, when a start fails, and when the server starts or stops. Chrome moves itself out of a systemd service's cgroup, so stopping the unit alone does not close it. A new profile in visible (`chrome`) mode stops at Chrome's first-run terms dialog until someone accepts it once on the display; `headless` has no dialog.
+
+Child TagUI processes inherit the server's environment, so `DISPLAY`, `TAGUI_CHROME_PROFILE`, `TAGUI_SIKULI_JAR`, `TAGUI_JAVA`, and `TAGUI_ENGINE=modern` set there apply to `browser_start` and `run_flow`.
+
 ## Tools
 
 The repair loop is `create_flow` or `save_flow`, `validate_flow`, `run_workspace_flow`, then `edit_flow` on `failing_line`.
@@ -207,7 +238,7 @@ Run that from a shell where `PYTHONPATH` includes `src/tagui_mcp`, or use the in
 - **Files from the live session** are written under the `work_directory` returned by `browser_start`. `browser_stop` deletes that directory. `save_session` writes the transcript into the workspace, which is kept. `run_steps` leaves its `work_directory` in place.
 - **Shell argument list.** On macOS and Linux, `src/tagui` forwards every remaining argument, including values with spaces. `tagui.cmd` still forwards only eight arguments and splits on spaces. The MCP server sends overflow inputs and inputs that contain spaces as `TAGUI_PARAM_1` … `TAGUI_PARAM_16`, which `tagui_header.js` copies into `p1` … `p16` when the CLI slot is empty. Options plus a datatable still share eight slots. Inputs cannot contain newlines.
 - **Engines are not bundled.** Missing `php`, CasperJS, PhantomJS, or Chrome shows up as a failed tool call (`stderr` often says `command not found`). Packaged TagUI builds already include those binaries. CasperJS 1.1's launcher asks for `python` on `PATH` (`python3` is not enough unless you symlink it). PhantomJS 2.1.1 on a system OpenSSL 3 fails unless the client env sets `OPENSSL_CONF` to `/dev/null` or another config that does not load the OpenSSL 3 `providers` module. On PHP 8, `count(false)` from `fgetcsv` used to abort the parser; `csv_row_count()` reports an empty datatable row instead.
-- **stdio only.** `MCPServer.run` can also serve Streamable HTTP, but this package does not enable it. Desktop clients use stdio.
+- **stdio by default.** Desktop clients launch the server over stdio. HTTP is opt-in (`--transport http`) and always needs a bearer token. There is no TLS and no per-user identity: one shared token grants every tool, and the tools run flows with the server user's privileges.
 - **Windows.** The executable name switches to `tagui.cmd`. Browser tools were exercised on Linux. Live mode reads CasperJS stdout a line at a time; that matches TagUI for Python, which depends on CasperJS flushing each `echo`.
 
 ## Layout
@@ -215,6 +246,7 @@ Run that from a shell where `PYTHONPATH` includes `src/tagui_mcp`, or use the in
 ```
 src/tagui_mcp/
   tagui_mcp/server.py     MCP tools (stdio)
+  tagui_mcp/http_transport.py  Streamable HTTP behind a bearer token
   tagui_mcp/service.py    one-at-a-time flow runs and the live session
   tagui_mcp/runner.py     tagui CLI wrapper
   tagui_mcp/session.py    live-mode stdin/stdout protocol
