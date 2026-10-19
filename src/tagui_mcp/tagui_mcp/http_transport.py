@@ -22,6 +22,9 @@ from typing import Any
 
 TOKEN_ENV = "TAGUI_MCP_TOKEN"
 TOKEN_FILE_ENV = "TAGUI_MCP_TOKEN_FILE"
+ALLOWED_HOSTS_ENV = "TAGUI_MCP_ALLOWED_HOSTS"
+ALLOWED_ORIGINS_ENV = "TAGUI_MCP_ALLOWED_ORIGINS"
+PATH_ENV = "TAGUI_MCP_PATH"
 MIN_TOKEN_LENGTH = 32
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
@@ -119,11 +122,87 @@ class BearerTokenMiddleware:
             await send({"type": "websocket.close", "code": 1008})
 
 
-def build_app(token: str, host: str = DEFAULT_HOST, path: str = DEFAULT_PATH) -> BearerTokenMiddleware:
+def _parse_list(val: str | None) -> list[str]:
+    if not val:
+        return []
+    return [item.strip() for item in val.split(",") if item.strip()]
+
+
+def _build_transport_security(
+    host: str,
+    allowed_hosts: list[str] | None = None,
+    allowed_origins: list[str] | None = None,
+) -> Any:
+    from mcp.server.streamable_http import TransportSecuritySettings
+
+    env_hosts = _parse_list(os.environ.get(ALLOWED_HOSTS_ENV))
+    env_origins = _parse_list(os.environ.get(ALLOWED_ORIGINS_ENV))
+
+    hosts = list(allowed_hosts) if allowed_hosts is not None else (env_hosts if env_hosts else None)
+    origins = list(allowed_origins) if allowed_origins is not None else (env_origins if env_origins else None)
+
+    if hosts is None and origins is None:
+        return None
+
+    if hosts and ("*" in hosts):
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+
+    normalized_hosts: list[str] = []
+    if hosts:
+        for h in hosts:
+            if h not in normalized_hosts:
+                normalized_hosts.append(h)
+            if not h.endswith(":*") and ":" not in h:
+                wildcard = f"{h}:*"
+                if wildcard not in normalized_hosts:
+                    normalized_hosts.append(wildcard)
+
+    if is_loopback(host):
+        for default_h in ("127.0.0.1:*", "localhost:*", "[::1]:*"):
+            if default_h not in normalized_hosts:
+                normalized_hosts.append(default_h)
+
+    normalized_origins: list[str] = []
+    if origins:
+        normalized_origins.extend(origins)
+    else:
+        for h in normalized_hosts:
+            base = h[:-2] if h.endswith(":*") else h
+            for scheme in ("http://", "https://"):
+                entry = f"{scheme}{base}"
+                if entry not in normalized_origins:
+                    normalized_origins.append(entry)
+                if not base.endswith(":*") and ":" not in base:
+                    entry_wc = f"{scheme}{base}:*"
+                    if entry_wc not in normalized_origins:
+                        normalized_origins.append(entry_wc)
+
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=normalized_hosts,
+        allowed_origins=normalized_origins,
+    )
+
+
+def build_app(
+    token: str,
+    host: str = DEFAULT_HOST,
+    path: str = DEFAULT_PATH,
+    allowed_hosts: list[str] | None = None,
+    allowed_origins: list[str] | None = None,
+) -> BearerTokenMiddleware:
     """The MCP Streamable HTTP app, wrapped so no request reaches it without the token."""
     from tagui_mcp.server import mcp
 
-    return BearerTokenMiddleware(mcp.streamable_http_app(streamable_http_path=path, host=host), token)
+    transport_security = _build_transport_security(
+        host, allowed_hosts=allowed_hosts, allowed_origins=allowed_origins
+    )
+    return BearerTokenMiddleware(
+        mcp.streamable_http_app(
+            streamable_http_path=path, host=host, transport_security=transport_security
+        ),
+        token,
+    )
 
 
 def serve_http(
@@ -131,6 +210,8 @@ def serve_http(
     port: int = DEFAULT_PORT,
     allow_remote: bool = False,
     path: str = DEFAULT_PATH,
+    allowed_hosts: list[str] | None = None,
+    allowed_origins: list[str] | None = None,
 ) -> None:
     """Serve MCP over HTTP until stopped. Raises TokenError before binding if the token is bad."""
     import uvicorn
@@ -138,12 +219,21 @@ def serve_http(
     from tagui_mcp.runner import reap_tagui_chrome
     from tagui_mcp.service import reset_service
 
+    if path == DEFAULT_PATH and PATH_ENV in os.environ:
+        path = os.environ[PATH_ENV].strip() or DEFAULT_PATH
+
     if not allow_remote and not is_loopback(host):
         raise TokenError(
             f"{host} is not a loopback address. Pass --allow-remote only behind a TLS proxy "
             "or another trusted tunnel."
         )
-    app = build_app(load_token(), host=host, path=path)
+    app = build_app(
+        load_token(),
+        host=host,
+        path=path,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
+    )
     # Chrome moves itself out of the service's cgroup, so a restart can leave one running.
     reap_tagui_chrome()
 

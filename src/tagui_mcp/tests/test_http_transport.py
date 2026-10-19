@@ -16,8 +16,11 @@ from pathlib import Path
 import pytest
 
 from tagui_mcp.http_transport import (
+    ALLOWED_HOSTS_ENV,
+    ALLOWED_ORIGINS_ENV,
     BearerTokenMiddleware,
     TokenError,
+    _build_transport_security,
     is_loopback,
     load_token,
 )
@@ -188,13 +191,15 @@ def _free_port() -> int:
         return int(probe.getsockname()[1])
 
 
-def _post(url: str, token: str | None) -> int:
+def _post(url: str, token: str | None, host_header: str | None = None) -> int:
     headers = {
         "content-type": "application/json",
         "accept": "application/json, text/event-stream",
     }
     if token is not None:
         headers["authorization"] = f"Bearer {token}"
+    if host_header is not None:
+        headers["host"] = host_header
     body = json.dumps(
         {
             "jsonrpc": "2.0",
@@ -263,3 +268,78 @@ def test_http_server_end_to_end(tmp_path: Path) -> None:
             process.wait()
     output = process.stdout.read() + process.stderr.read()
     assert TOKEN not in output
+
+
+def test_build_transport_security_defaults_and_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(ALLOWED_HOSTS_ENV, raising=False)
+    monkeypatch.delenv(ALLOWED_ORIGINS_ENV, raising=False)
+    assert _build_transport_security("127.0.0.1") is None
+
+    # Wildcard disables rebinding protection
+    disabled = _build_transport_security("127.0.0.1", allowed_hosts=["*"])
+    assert disabled is not None
+    assert disabled.enable_dns_rebinding_protection is False
+
+    # Specific hosts get wildcard ports and origins
+    sec = _build_transport_security("127.0.0.1", allowed_hosts=["cloud.cidadejardim.com"])
+    assert sec is not None
+    assert sec.enable_dns_rebinding_protection is True
+    assert "cloud.cidadejardim.com" in sec.allowed_hosts
+    assert "cloud.cidadejardim.com:*" in sec.allowed_hosts
+    assert "127.0.0.1:*" in sec.allowed_hosts
+    assert "https://cloud.cidadejardim.com" in sec.allowed_origins
+    assert "https://cloud.cidadejardim.com:*" in sec.allowed_origins
+
+    # From env vars
+    monkeypatch.setenv(ALLOWED_HOSTS_ENV, "myhost.local, other.local")
+    monkeypatch.setenv(ALLOWED_ORIGINS_ENV, "https://myhost.local")
+    from_env = _build_transport_security("127.0.0.1")
+    assert from_env is not None
+    assert "myhost.local" in from_env.allowed_hosts
+    assert "other.local" in from_env.allowed_hosts
+    assert from_env.allowed_origins == ["https://myhost.local"]
+
+
+def test_http_server_allowed_hosts_and_dns_rebinding(tmp_path: Path) -> None:
+    port = _free_port()
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "tagui_mcp",
+            "--transport",
+            "http",
+            "--port",
+            str(port),
+            "--allowed-hosts",
+            "cloud.cidadejardim.com",
+        ],
+        env=_env(tmp_path, TAGUI_MCP_TOKEN=TOKEN),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=str(tmp_path),
+    )
+    url = f"http://127.0.0.1:{port}/mcp"
+    try:
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            try:
+                socket.create_connection(("127.0.0.1", port), timeout=0.5).close()
+                break
+            except OSError:
+                assert process.poll() is None, process.stderr.read()
+                time.sleep(0.2)
+        # Disallowed host -> 421 Invalid Host header
+        assert _post(url, TOKEN, host_header="evil.com") == 421
+        # Allowed host -> 200
+        assert _post(url, TOKEN, host_header="cloud.cidadejardim.com") == 200
+        # Port-suffixed allowed host -> 200
+        assert _post(url, TOKEN, host_header="cloud.cidadejardim.com:443") == 200
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
