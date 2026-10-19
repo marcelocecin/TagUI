@@ -149,3 +149,99 @@ def test_run_steps_keeps_work_directory(tmp_path: Path) -> None:
     assert "from steps" in str(result["output"])
     assert result["work_directory"] == str(tmp_path)
     assert (tmp_path / "mcp_steps").is_file()
+
+
+def test_reaper_leaves_another_tagui_install_alone(monkeypatch, tmp_path: Path) -> None:
+    import signal
+    import subprocess
+
+    from tagui_mcp import runner
+
+    ours = tmp_path / "modern" / "src"
+    ours.mkdir(parents=True)
+    (ours / "tagui").write_text("#!/bin/sh\n", encoding="utf-8")
+    theirs = tmp_path / "official" / "src"
+    ps_output = "\n".join(
+        [
+            f"101 chrome --remote-debugging-port=9222 --user-data-dir={ours}/chrome/tagui_user_profile",
+            f"102 chrome --remote-debugging-port=9222 --user-data-dir={theirs}/chrome/tagui_user_profile",
+            "103 php -q tagui_chrome.php",
+            "104 chrome --user-data-dir=/tmp/tagui_modern_profile_9_abcd",
+            "105 chrome --remote-debugging-port=9222 --user-data-dir=/elsewhere/tagui_user_profile",
+        ]
+    )
+    killed: list[int] = []
+    monkeypatch.delenv("TAGUI_CHROME_PROFILE", raising=False)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, stdout=ps_output, stderr=""),
+    )
+    monkeypatch.setattr(runner.os, "kill", lambda pid, sig: killed.append(pid) if sig == signal.SIGTERM else None)
+    monkeypatch.setattr(runner.os, "readlink", lambda path: str(theirs) if "/102/" in path or "/103/" in path else str(ours))
+
+    runner.reap_tagui_chrome(ours / "tagui")
+
+    assert set(killed) == {101, 104}
+
+
+def test_reaper_with_no_tagui_install_only_touches_modern_temp_profiles(monkeypatch, tmp_path: Path) -> None:
+    import signal
+    import subprocess
+
+    from tagui_mcp import runner
+
+    ps_output = "\n".join(
+        [
+            "201 chrome --remote-debugging-port=9222 --user-data-dir=/x/chrome/tagui_user_profile",
+            "202 chrome --user-data-dir=/tmp/tagui_modern_profile_9_abcd",
+        ]
+    )
+    killed: list[int] = []
+    monkeypatch.delenv("TAGUI_BIN", raising=False)
+    monkeypatch.delenv("TAGUI_SRC", raising=False)
+    monkeypatch.delenv("TAGUI_CHROME_PROFILE", raising=False)
+    monkeypatch.setattr(runner.shutil, "which", lambda name: None)
+    monkeypatch.setattr(
+        runner,
+        "resolve_tagui_executable",
+        lambda explicit=None: (_ for _ in ()).throw(runner.TaguiFailure("no tagui")),
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, stdout=ps_output, stderr=""),
+    )
+    monkeypatch.setattr(runner.os, "kill", lambda pid, sig: killed.append(pid) if sig == signal.SIGTERM else None)
+
+    runner.reap_tagui_chrome()
+
+    assert set(killed) == {202}
+
+
+def test_reaper_stops_a_chrome_on_the_configured_profile_only(monkeypatch, tmp_path: Path) -> None:
+    import signal
+    import subprocess
+
+    from tagui_mcp import runner
+
+    profile = tmp_path / "svc-profile"
+    ps_output = "\n".join(
+        [
+            f"301 chrome --remote-debugging-port=41739 --user-data-dir={profile} --window-size=1366,842 about:blank",
+            f"302 chrome --remote-debugging-port=41740 --user-data-dir={profile}-other about:blank",
+            "303 chrome --remote-debugging-port=41741 --user-data-dir=/home/someone/profile about:blank",
+        ]
+    )
+    killed: list[int] = []
+    monkeypatch.setenv("TAGUI_CHROME_PROFILE", str(profile))
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, stdout=ps_output, stderr=""),
+    )
+    monkeypatch.setattr(runner.os, "kill", lambda pid, sig: killed.append(pid) if sig == signal.SIGTERM else None)
+
+    runner.reap_tagui_chrome(tmp_path / "missing" / "tagui")
+
+    assert set(killed) == {301}
