@@ -277,15 +277,46 @@ def _kill_process_group(pid: int) -> None:
         return
 
 
-def reap_tagui_chrome() -> None:
+def _belongs_to_install(pid: int, command: str, install_dir: Path | None, use_cwd: bool) -> bool:
+    """True when a process was started from this TagUI install, not another one.
+
+    The launcher passes an absolute --user-data-dir under its own src directory.
+    tagui_chrome.php is started with a relative name, so its working directory decides.
+    """
+    if install_dir is None:
+        return False
+    if f"{install_dir}{os.sep}" in command:
+        return True
+    if not use_cwd:
+        return False
+    try:
+        return Path(os.readlink(f"/proc/{pid}/cwd")) == install_dir
+    except OSError:
+        return False
+
+
+def reap_tagui_chrome(tagui_bin: str | Path | None = None) -> None:
     """Stop a Chrome left behind on TagUI's debugging port and profile.
 
     TagUI launches Chrome in the background, and Chrome often leaves the
     process group, so killing the runner does not always close the browser.
-    The match is the same pair of markers src/end_processes uses.
+    The match is the same pair of markers src/end_processes uses, limited to
+    processes that belong to the TagUI install this server runs. Another TagUI
+    install under the same user, for example a scheduled official run that is
+    using port 9222, is not touched.
+
+    When TAGUI_CHROME_PROFILE is set, a Chrome started with exactly that
+    --user-data-dir is also stopped. The modern engine opens it on a free port,
+    and a leftover browser on a profile blocks the next launch.
     """
     if os.name != "posix":
         return
+    try:
+        install_dir: Path | None = resolve_tagui_executable(tagui_bin).parent
+    except TaguiFailure:
+        install_dir = None
+    profile = os.environ.get("TAGUI_CHROME_PROFILE", "").strip()
+    dedicated = re.compile(r"--user-data-dir=" + re.escape(profile) + r"(\s|$)") if profile else None
     try:
         listed = subprocess.run(
             ["ps", "x", "-o", "pid=,command="],
@@ -300,10 +331,13 @@ def reap_tagui_chrome() -> None:
         chrome = "remote-debugging-port=9222" in line and "tagui_user_profile" in line
         helper = "tagui_chrome.php" in line
         modern = "tagui_modern_profile_" in line
-        if not chrome and not helper and not modern:
+        owned = dedicated is not None and dedicated.search(line) is not None
+        if not chrome and not helper and not modern and not owned:
             continue
         pid_text = line.strip().split(maxsplit=1)[0]
         if not pid_text.isdigit():
+            continue
+        if not (modern or owned) and not _belongs_to_install(int(pid_text), line, install_dir, use_cwd=helper):
             continue
         try:
             os.kill(int(pid_text), signal.SIGTERM)
@@ -379,7 +413,7 @@ def _run_flow(
     except subprocess.TimeoutExpired:
         timed_out = True
         _kill_process_group(process.pid)
-        reap_tagui_chrome()
+        reap_tagui_chrome(executable)
         stdout, stderr = process.communicate()
     exit_code = process.returncode
     output, output_truncated = _truncate(stdout or "", MAX_OUTPUT_CHARS)

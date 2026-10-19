@@ -301,7 +301,7 @@ class LiveSession:
                     process.wait(timeout=3)
                 except subprocess.TimeoutExpired:
                     pass
-        reap_tagui_chrome()
+        reap_tagui_chrome(self._tagui_bin)
         if self._stderr_thread is not None:
             self._stderr_thread.join(timeout=1)
             self._stderr_thread = None
