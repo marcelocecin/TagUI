@@ -245,4 +245,5 @@ def serve_http(
     # live browser has to be installed first or the session would be left running.
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
-    uvicorn.run(app, host=host, port=port, log_level="info", access_log=False)
+    access_log = bool(int(os.environ.get("TAGUI_MCP_ACCESS_LOG", "1")))
+    uvicorn.run(app, host=host, port=port, log_level="info", access_log=access_log)
