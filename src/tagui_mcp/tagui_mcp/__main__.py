@@ -24,6 +24,14 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="allow a non-loopback --host. The connection is plain HTTP, so terminate TLS in front of it.",
     )
+    parser.add_argument(
+        "--allowed-hosts",
+        help="comma-separated list of allowed Host header values (or * to disable DNS rebinding protection)",
+    )
+    parser.add_argument(
+        "--allowed-origins",
+        help="comma-separated list of allowed Origin header values (optional)",
+    )
     return parser
 
 
@@ -36,8 +44,26 @@ def main(argv: list[str] | None = None) -> None:
         return
     from tagui_mcp.http_transport import serve_http
 
+    allowed_hosts = (
+        [h.strip() for h in args.allowed_hosts.split(",") if h.strip()]
+        if args.allowed_hosts
+        else None
+    )
+    allowed_origins = (
+        [o.strip() for o in args.allowed_origins.split(",") if o.strip()]
+        if args.allowed_origins
+        else None
+    )
+
     try:
-        serve_http(host=args.host, port=args.port, allow_remote=args.allow_remote, path=args.path)
+        serve_http(
+            host=args.host,
+            port=args.port,
+            allow_remote=args.allow_remote,
+            path=args.path,
+            allowed_hosts=allowed_hosts,
+            allowed_origins=allowed_origins,
+        )
     except TokenError as exc:
         print(f"tagui-mcp: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
