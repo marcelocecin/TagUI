@@ -33,7 +33,7 @@ ALLOWED_OPTIONS = frozenset(
     }
 )
 BROWSER_OPTIONS = frozenset({"chrome", "headless", "firefox"})
-ALLOWED_EXTENSIONS = frozenset({"", "txt", "js", "tagui", "gui"})
+ALLOWED_EXTENSIONS = frozenset({"", "txt", "js", "tagui", "tag", "gui"})
 MAX_FORWARDED_ARGS = 8
 MAX_INPUTS = 16
 MAX_OUTPUT_CHARS = 100_000
@@ -140,7 +140,7 @@ def check_flow_file(flow_file: str) -> Path:
     if extension not in ALLOWED_EXTENSIONS:
         raise TaguiFailure(
             f"flow file extension .{extension} is not accepted by TagUI. "
-            "Use no extension, .txt, .js, or .tagui"
+            "Use no extension, .txt, .js, .tag, or .tagui"
         )
     return path
 

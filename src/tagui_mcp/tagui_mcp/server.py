@@ -63,7 +63,7 @@ def run_flow(
 ) -> str:
     """Run a TagUI flow file and return its output as JSON.
 
-    flow_file is a local path. TagUI accepts no extension, or .txt, .js, or .tagui.
+    flow_file is a local path. TagUI accepts no extension, or .txt, .js, .tag, or .tagui.
     options are CLI flags: chrome, headless, firefox, quiet, report, speed, debug,
     test, baseline, upload, modern. Omit options to run in quiet mode on TagUI's
     default PhantomJS browser. Pass ["headless"] or ["chrome"] to use Chrome.

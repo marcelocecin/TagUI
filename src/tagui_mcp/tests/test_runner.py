@@ -84,11 +84,17 @@ def test_run_flow_rejects_bad_usage(tmp_path: Path) -> None:
     assert missing["ok"] is False
     assert "cannot find" in str(missing["error"])
 
-    bad_ext = tmp_path / "flow.tag"
+    bad_ext = tmp_path / "flow.py"
     bad_ext.write_text("echo hi\n", encoding="utf-8")
     rejected = run_flow(str(bad_ext), tagui_bin=FAKE)
     assert rejected["ok"] is False
     assert "extension" in str(rejected["error"])
+
+    tag_flow = tmp_path / "legacy.tag"
+    tag_flow.write_text("echo hi\n", encoding="utf-8")
+    tag_ok = run_flow(str(tag_flow), tagui_bin=FAKE)
+    assert tag_ok["ok"] is True
+    assert str(tag_flow) in tag_ok["command"][1]
 
     flow = tmp_path / "hello"
     flow.write_text("echo hi\n", encoding="utf-8")
