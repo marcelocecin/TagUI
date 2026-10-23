@@ -822,6 +822,80 @@ $transfer->execute_range(array("write 'abc'", 'dump "some text - " variable'), 0
 expect('write default', !$transfer->stopped && is_file($files . '/text1.txt') && str_contains((string)file_get_contents($files . '/text1.txt'), 'abc'), true);
 expect('dump default', is_file($files . '/text2.txt') && trim((string)file_get_contents($files . '/text2.txt')) === 'some text - X', true);
 
+class EvidenceChrome {
+public $dirs = array();
+function capture_tabs($dir) {
+$this->dirs[] = $dir;
+file_put_contents($dir . DIRECTORY_SEPARATOR . 'failure_tab.png', "\x89PNG\r\n\x1a\n" . str_repeat('x', 32));
+file_put_contents($dir . DIRECTORY_SEPARATOR . 'failure_tab_2.png', "\x89PNG\r\n\x1a\n" . str_repeat('y', 32));
+return 2;}}
+class MissingShotChrome {
+public $shots = 0;
+function find($locator, $live) {return null;}
+function capture_tabs($dir) {
+$this->shots++;
+file_put_contents($dir . DIRECTORY_SEPARATOR . 'failure_tab.png', "\x89PNG\r\n\x1a\n" . str_repeat('z', 32));
+return 1;}}
+$evidence_dir = sys_get_temp_dir() . '/tagui-evidence-' . getmypid();
+@mkdir($evidence_dir, 0700, true);
+$evidence_chrome = new EvidenceChrome();
+$visual_fail = new TaguiModern($evidence_chrome, true, $evidence_dir);
+$visual_fail->capture = true;
+$visual_fail->fail(43, 'visual step timed out waiting for OculiX');
+expect('visual evidence line', $visual_fail->captured[0], 'ERROR - [LINE 44] visual step timed out waiting for OculiX');
+expect('visual evidence stops', $visual_fail->stopped, true);
+expect('visual evidence tab', is_file($evidence_dir . '/failure_tab.png'), true);
+expect('visual evidence dir', $evidence_chrome->dirs, array($evidence_dir));
+$visual_fail->flow_path = sys_get_temp_dir();
+$visual_fail->failure_captured = false;
+$visual_fail->fail(2, 'visual step timed out waiting for OculiX');
+expect('evidence stays beside launched flow', $evidence_chrome->dirs[1] === $evidence_dir, true);
+$live_shots = count($evidence_chrome->dirs);
+$live_fail = new TaguiModern($evidence_chrome, true, $evidence_dir);
+$live_fail->live = true;
+$live_fail->capture = true;
+$live_fail->fail(-1, 'visual step timed out waiting for OculiX');
+expect('live skips evidence', count($evidence_chrome->dirs), $live_shots);
+expect('live does not stop', $live_fail->stopped, false);
+$dom_dir = sys_get_temp_dir() . '/tagui-evidence-dom-' . getmypid();
+@mkdir($dom_dir, 0700, true);
+$dom_chrome = new MissingShotChrome();
+$dom_fail = new TaguiModern($dom_chrome, true, $dom_dir);
+$dom_fail->capture = true;
+$dom_fail->timeout = 0.2;
+$dom_fail->execute_range(array('click missing-button'), 0, 0, true);
+expect('dom evidence', $dom_fail->stopped && str_contains($dom_fail->captured[0], 'ERROR - [LINE 1] cannot find missing-button'), true);
+expect('dom evidence tab', is_file($dom_dir . '/failure_tab.png'), true);
+expect('dom evidence once', $dom_chrome->shots, 1);
+$saved_jar = getenv('TAGUI_SIKULI_JAR');
+putenv('TAGUI_SIKULI_JAR=/tmp/tagui-missing-oculix.jar');
+$route_dir = sys_get_temp_dir() . '/tagui-evidence-visual-' . getmypid();
+@mkdir($route_dir, 0700, true);
+$route_chrome = new EvidenceChrome();
+$route_fail = new TaguiModern($route_chrome, true, $route_dir);
+$route_fail->capture = true;
+$route_fail->execute_range(array('click missing-mark.png'), 0, 0, true);
+$route_text = implode("\n", $route_fail->captured);
+expect('visual route evidence', $route_fail->stopped && str_contains($route_text, 'OculiX') && !str_contains($route_text, 'cannot find '), true);
+expect('visual route tab', is_file($route_dir . '/failure_tab.png') && count($route_chrome->dirs) === 1, true);
+if ($saved_jar !== false && $saved_jar !== '') putenv('TAGUI_SIKULI_JAR=' . $saved_jar);
+else putenv('TAGUI_SIKULI_JAR');
+$display = getenv('DISPLAY');
+$hidden = sys_get_temp_dir() . '/tagui-no-desktop-' . getmypid() . '.png';
+putenv('DISPLAY');
+expect('desktop needs a display', tagui_capture_desktop($hidden), false);
+expect('desktop writes nothing without a display', is_file($hidden), false);
+if (is_string($display) && $display !== '') putenv('DISPLAY=' . $display);
+else putenv('DISPLAY');
+if (is_string($display) && $display !== '') {
+expect('desktop png beside flow', tagui_png_file($evidence_dir . '/failure_desktop.png'), true);
+$py_out = $evidence_dir . '/py_desktop.png';
+$py_bin = tagui_which('python3');
+$py_code = 1;
+if ($py_bin !== '') {
+$py_code = tagui_run_bounded(array($py_bin, dirname(__DIR__) . '/tagui_desktop.py', $py_out), 20);}
+expect('python desktop png', $py_code === 0 && tagui_png_file($py_out), true);}
+
 foreach (array('tagui_modern.php', 'tagui_steps.php', 'tagui_runtime.php') as $source_name) {
 $source = file_get_contents(dirname(__DIR__) . '/' . $source_name);
 expect($source_name . ' no curl', str_contains($source, 'curl_'), false);

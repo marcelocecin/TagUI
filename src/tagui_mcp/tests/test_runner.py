@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
-
+import os
 import time
+from pathlib import Path
 
 from tagui_mcp.runner import _screenshots, diagnose_run, resolve_tagui_executable, run_flow, run_steps
 
@@ -143,6 +143,33 @@ def test_screenshots_are_files_written_during_the_run(tmp_path: Path) -> None:
     shot = tmp_path / "snap1.png"
     shot.write_bytes(b"png")
     assert _screenshots(tmp_path, started) == [str(shot)]
+
+
+def test_failure_captures_are_listed_and_older_shots_are_not(tmp_path: Path) -> None:
+    started = time.time()
+    tab = tmp_path / "failure_tab.png"
+    desk = tmp_path / "failure_desktop.png"
+    extra = tmp_path / "failure_tab_2.png"
+    stale = tmp_path / "old.png"
+    for path in (tab, desk, extra, stale):
+        path.write_bytes(b"png")
+    os.utime(stale, (started - 10, started - 10))
+    found = _screenshots(tmp_path, started)
+    assert found == sorted(str(path) for path in (tab, desk, extra))
+
+
+def test_visual_timeout_hint_mentions_screenshots(tmp_path: Path) -> None:
+    flow = tmp_path / "flow.tag"
+    flow.write_text("click mark.png\n", encoding="utf-8")
+    result = diagnose_run(
+        flow,
+        ["ERROR - [LINE 44] visual step timed out waiting for OculiX"],
+        "",
+        [str(tmp_path / "failure_tab.png"), str(tmp_path / "failure_desktop.png")],
+    )
+    assert result["failing_line"] == 44
+    assert result["screenshots"] == [str(tmp_path / "failure_tab.png"), str(tmp_path / "failure_desktop.png")]
+    assert "screenshot" in str(result["hint"])
 
 
 def test_run_steps_keeps_work_directory(tmp_path: Path) -> None:
