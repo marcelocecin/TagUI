@@ -193,8 +193,10 @@ def _hint(error: str) -> str | None:
     if "cannot find" in error:
         return (
             "TagUI tries xpath, then css, id, name, class, title, aria-label, visible text, and href. "
-            "A bare HTML tag often does not match. screenshots lists a page image captured at the timeout."
+            "A bare HTML tag often does not match. screenshots lists images captured when the step failed."
         )
+    if "visual step" in error or "OculiX" in error:
+        return "screenshots lists the browser tab and desktop images captured when the step failed."
     if "number of step {" in error or "put { to next line" in error:
         return "Nested if, for, while, frame, and popup need { and } on their own lines."
     if "inconsistent quotes" in error:

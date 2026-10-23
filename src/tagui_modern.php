@@ -413,6 +413,68 @@ return array(
 'width' => (float)$viewport['clientWidth'],
 'height' => (float)$viewport['clientHeight']);}
 
+function capture_tabs($directory) {
+$directory = (string)$directory;
+if ($directory === '' || !is_dir($directory)) return 0;
+$saved = 0;
+$n = 0;
+foreach ($this->failure_pages() as $page) {
+if ($n >= 8) break;
+$n++;
+$name = $n === 1 ? 'failure_tab.png' : ('failure_tab_' . $n . '.png');
+$path = $directory . DIRECTORY_SEPARATOR . $name;
+$ws = isset($page['webSocketDebuggerUrl']) ? (string)$page['webSocketDebuggerUrl'] : '';
+try {if ($this->capture_socket_png($ws, $path)) $saved++;}
+catch (Exception $e) {}}
+if ($saved === 0 && $this->client !== null) {
+try {if ($this->screenshot($directory . DIRECTORY_SEPARATOR . 'failure_tab.png', null)) $saved++;}
+catch (Exception $e) {}}
+return $saved;}
+
+private function failure_pages() {
+$active = (string)$this->ws_url;
+$first = array();
+$rest = array();
+foreach ($this->list_pages() as $target) {
+if (!is_array($target) || !isset($target['type']) || $target['type'] !== 'page') continue;
+if (empty($target['webSocketDebuggerUrl'])) continue;
+$url = isset($target['url']) ? (string)$target['url'] : '';
+if (str_starts_with($url, 'chrome://') || str_starts_with($url, 'devtools://') || str_starts_with($url, 'chrome-extension://')) continue;
+if ((string)$target['webSocketDebuggerUrl'] === $active) $first[] = $target;
+else $rest[] = $target;}
+return array_merge($first, $rest);}
+
+private function capture_socket_png($ws, $path) {
+if ($ws === '') return false;
+$client = new WebSocket\Client($ws, array('timeout' => 8, 'fragment_size' => 65536));
+try {
+$this->socket_call($client, 1, 'Page.enable', new stdClass(), 4);
+try {$shot = $this->socket_call($client, 2, 'Page.captureScreenshot', array('format' => 'png', 'fromSurface' => true), 6);}
+catch (Exception $e) {
+if (!str_contains($e->getMessage(), 'Page.captureScreenshot')) throw $e;
+$shot = array();}
+if (empty($shot['data'])) {
+$shot = $this->socket_call($client, 3, 'Page.captureScreenshot', array('format' => 'png', 'fromSurface' => false), 8);}
+if (empty($shot['data'])) return false;
+$bytes = base64_decode($shot['data'], true);
+if (!is_string($bytes) || strlen($bytes) < 32 || strncmp($bytes, "\x89PNG\r\n\x1a\n", 8) !== 0) return false;
+return file_put_contents($path, $bytes) !== false;}
+finally {try {$client->close();} catch (Exception $e) {}}}
+
+private function socket_call($client, $id, $method, $params, $timeout) {
+$body = json_encode(array('id' => $id, 'method' => $method, 'params' => $params));
+$client->send($body);
+if (method_exists($client, 'setTimeout')) $client->setTimeout((int)ceil(max(1, (float)$timeout)));
+$deadline = microtime(true) + max(1, (float)$timeout);
+while (microtime(true) < $deadline) {
+try {$raw = $client->receive();}
+catch (Exception $e) {continue;}
+$message = json_decode($raw, true);
+if (!is_array($message) || !isset($message['id']) || (int)$message['id'] !== (int)$id) continue;
+if (isset($message['error'])) throw new RuntimeException($method . ' failed: ' . json_encode($message['error']));
+return isset($message['result']) && is_array($message['result']) ? $message['result'] : array();}
+throw new RuntimeException('timed out waiting for ' . $method);}
+
 function set_download_path($dir) {
 $dir = str_replace('\\', '/', (string)$dir);
 $this->download_path = $dir;
@@ -935,9 +997,12 @@ public $started_at = 0;
 public $steps_ran = 0;
 public $steps_skipped = 0;
 public $blocks_skipped = 0;
+public $failure_captured = false;
+public $evidence_dir = '';
 
 function __construct($chrome, $quiet, $flow_path) {
 $this->chrome = $chrome; $this->quiet = $quiet; $this->flow_path = $flow_path;
+$this->evidence_dir = $flow_path;
 $this->vars['infinity'] = 1024;
 for ($i = 1; $i <= 16; $i++) {
 $this->vars['p' . $i] = '';
@@ -1714,9 +1779,21 @@ function fail($index, $message) {
 $prefix = 'ERROR - ';
 if ($index >= 0 && !$this->live) $prefix .= '[LINE ' . ($index + 1) . '] ';
 $this->emit($prefix . $message);
-if (!$this->live && $this->chrome !== null && str_contains($message, 'cannot find ') && method_exists($this->chrome, 'screenshot')) {
-try {$this->chrome->screenshot($this->next_snap(), null);} catch (Exception $e) {}}
+// Chrome is still open. Visual/OculiX timeouts use this same path; they do not say "cannot find".
+if (!$this->live) $this->capture_failure_evidence();
 if (!$this->live) $this->stopped = true;}
+
+function capture_failure_evidence() {
+if ($this->live || $this->failure_captured) return;
+$this->failure_captured = true;
+$dir = $this->evidence_dir !== '' ? $this->evidence_dir : $this->flow_path;
+if (!is_string($dir) || $dir === '' || !is_dir($dir)) return;
+if ($this->chrome === null || (!method_exists($this->chrome, 'capture_tabs') && !method_exists($this->chrome, 'screenshot'))) return;
+try {
+if (method_exists($this->chrome, 'capture_tabs')) $this->chrome->capture_tabs($dir);
+else $this->chrome->screenshot($dir . DIRECTORY_SEPARATOR . 'failure_tab.png', null);}
+catch (Exception $e) {}
+try {tagui_capture_desktop($dir . DIRECTORY_SEPARATOR . 'failure_desktop.png');} catch (Exception $e) {}}
 
 function is_page_snap($target) {
 return strcasecmp(trim((string)$target), 'page') === 0;}
@@ -1770,6 +1847,94 @@ return -1;}}
 /* -------------------------------------------------------------------------- */
 /* Entry point                                                                */
 /* -------------------------------------------------------------------------- */
+
+function tagui_png_file($path, $minimum = 32) {
+if (!is_string($path) || !is_file($path)) return false;
+$size = filesize($path);
+if ($size === false || $size < (int)$minimum) return false;
+$handle = fopen($path, 'rb');
+if ($handle === false) return false;
+$magic = fread($handle, 8);
+fclose($handle);
+return $magic === "\x89PNG\r\n\x1a\n";}
+
+function tagui_run_bounded($command, $seconds) {
+$null = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
+$descriptor = array(
+0 => array('file', $null, 'r'),
+1 => array('file', $null, 'w'),
+2 => array('file', $null, 'w'));
+$process = proc_open($command, $descriptor, $pipes);
+if (!is_resource($process)) return 127;
+$deadline = microtime(true) + max(1, (float)$seconds);
+$code = null;
+while (microtime(true) < $deadline) {
+$status = proc_get_status($process);
+if (!is_array($status)) break;
+if (!empty($status['running'])) {usleep(100000); continue;}
+// The first status call that sees the process stop holds the real exit code.
+// proc_close can then return -1 because that wait already collected it.
+$code = isset($status['exitcode']) ? (int)$status['exitcode'] : -1;
+break;}
+if ($code === null) {
+proc_terminate($process);
+usleep(200000);
+$status = proc_get_status($process);
+if (is_array($status) && !empty($status['running'])) proc_terminate($process, 9);
+proc_close($process);
+return 124;}
+$closed = proc_close($process);
+if ($code < 0 && is_int($closed) && $closed >= 0) return $closed;
+return $code;}
+
+function tagui_desktop_commands($path) {
+if (DIRECTORY_SEPARATOR === '\\') return array();
+if (PHP_OS_FAMILY === 'Darwin') return array(array('screencapture', '-x', $path));
+$display = getenv('DISPLAY');
+if (!is_string($display) || trim($display) === '') return array();
+$commands = array(
+array('import', '-window', 'root', $path),
+array('gm', 'import', '-window', 'root', $path),
+array('scrot', $path),
+array('gnome-screenshot', '-f', $path),
+array('maim', $path),
+array('ffmpeg', '-hide_banner', '-loglevel', 'error', '-y', '-f', 'x11grab', '-i', $display, '-frames:v', '1', $path));
+$script = __DIR__ . DIRECTORY_SEPARATOR . 'tagui_desktop.py';
+if (is_file($script)) $commands[] = array('python3', $script, $path);
+return $commands;}
+
+function tagui_capture_desktop_xwd($path) {
+if (DIRECTORY_SEPARATOR === '\\' || PHP_OS_FAMILY === 'Darwin') return false;
+$display = getenv('DISPLAY');
+if (!is_string($display) || trim($display) === '') return false;
+$xwd_bin = tagui_which('xwd');
+$convert = tagui_which('convert');
+if ($xwd_bin === '' || $convert === '') return false;
+$temp = tempnam(sys_get_temp_dir(), 'tagui_xwd_');
+if ($temp === false) return false;
+$xwd = $temp . '.xwd';
+@unlink($temp);
+tagui_run_bounded(array($xwd_bin, '-root', '-silent', '-out', $xwd), 8);
+if (is_file($xwd) && filesize($xwd) > 100) tagui_run_bounded(array($convert, $xwd, 'png:' . $path), 8);
+@unlink($xwd);
+if (tagui_png_file($path, 101)) return true;
+if (is_file($path)) @unlink($path);
+return false;}
+
+function tagui_capture_desktop($path) {
+if (!is_string($path) || $path === '') return false;
+$dir = dirname($path);
+if ($dir === '' || !is_dir($dir)) return false;
+if (is_file($path)) @unlink($path);
+foreach (tagui_desktop_commands($path) as $command) {
+$bin = tagui_which($command[0]);
+if ($bin === '') continue;
+$command[0] = $bin;
+// import and the libX11 grabber can exit -1 or non-zero after writing a good PNG.
+tagui_run_bounded($command, 12);
+if (tagui_png_file($path, 101)) return true;
+if (is_file($path)) @unlink($path);}
+return tagui_capture_desktop_xwd($path);}
 
 function tagui_write_output($text) {
 echo $text;
@@ -1828,6 +1993,7 @@ $engine->run_lines($lines);
 if ($engine->stopped) $failed = true;}}
 catch (Exception $e) {
 tagui_write_output('ERROR - ' . $e->getMessage() . "\n");
+try {$engine->capture_failure_evidence();} catch (Exception $ignored) {}
 $stop();
 return 1;}
 $stop();
