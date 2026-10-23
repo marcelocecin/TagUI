@@ -1848,8 +1848,10 @@ return -1;}}
 /* Entry point                                                                */
 /* -------------------------------------------------------------------------- */
 
-function tagui_png_file($path) {
-if (!is_string($path) || !is_file($path) || filesize($path) < 32) return false;
+function tagui_png_file($path, $minimum = 32) {
+if (!is_string($path) || !is_file($path)) return false;
+$size = filesize($path);
+if ($size === false || $size < (int)$minimum) return false;
 $handle = fopen($path, 'rb');
 if ($handle === false) return false;
 $magic = fread($handle, 8);
@@ -1865,20 +1867,25 @@ $descriptor = array(
 $process = proc_open($command, $descriptor, $pipes);
 if (!is_resource($process)) return 127;
 $deadline = microtime(true) + max(1, (float)$seconds);
-$running = true;
+$code = null;
 while (microtime(true) < $deadline) {
 $status = proc_get_status($process);
-if (!is_array($status) || empty($status['running'])) {$running = false; break;}
-usleep(100000);}
-if ($running) {
+if (!is_array($status)) break;
+if (!empty($status['running'])) {usleep(100000); continue;}
+// The first status call that sees the process stop holds the real exit code.
+// proc_close can then return -1 because that wait already collected it.
+$code = isset($status['exitcode']) ? (int)$status['exitcode'] : -1;
+break;}
+if ($code === null) {
 proc_terminate($process);
 usleep(200000);
 $status = proc_get_status($process);
 if (is_array($status) && !empty($status['running'])) proc_terminate($process, 9);
 proc_close($process);
 return 124;}
-$code = proc_close($process);
-return is_int($code) ? $code : 1;}
+$closed = proc_close($process);
+if ($code < 0 && is_int($closed) && $closed >= 0) return $closed;
+return $code;}
 
 function tagui_desktop_commands($path) {
 if (DIRECTORY_SEPARATOR === '\\') return array();
@@ -1907,11 +1914,12 @@ $temp = tempnam(sys_get_temp_dir(), 'tagui_xwd_');
 if ($temp === false) return false;
 $xwd = $temp . '.xwd';
 @unlink($temp);
-$code = tagui_run_bounded(array($xwd_bin, '-root', '-silent', '-out', $xwd), 8);
-$ok = $code === 0 && is_file($xwd) && tagui_run_bounded(array($convert, $xwd, 'png:' . $path), 8) === 0 && tagui_png_file($path);
+tagui_run_bounded(array($xwd_bin, '-root', '-silent', '-out', $xwd), 8);
+if (is_file($xwd) && filesize($xwd) > 100) tagui_run_bounded(array($convert, $xwd, 'png:' . $path), 8);
 @unlink($xwd);
-if (!$ok && is_file($path)) @unlink($path);
-return $ok;}
+if (tagui_png_file($path, 101)) return true;
+if (is_file($path)) @unlink($path);
+return false;}
 
 function tagui_capture_desktop($path) {
 if (!is_string($path) || $path === '') return false;
@@ -1922,7 +1930,9 @@ foreach (tagui_desktop_commands($path) as $command) {
 $bin = tagui_which($command[0]);
 if ($bin === '') continue;
 $command[0] = $bin;
-if (tagui_run_bounded($command, 12) === 0 && tagui_png_file($path)) return true;
+// import and the libX11 grabber can exit -1 or non-zero after writing a good PNG.
+tagui_run_bounded($command, 12);
+if (tagui_png_file($path, 101)) return true;
 if (is_file($path)) @unlink($path);}
 return tagui_capture_desktop_xwd($path);}
 

@@ -894,7 +894,49 @@ $py_bin = tagui_which('python3');
 $py_code = 1;
 if ($py_bin !== '') {
 $py_code = tagui_run_bounded(array($py_bin, dirname(__DIR__) . '/tagui_desktop.py', $py_out), 20);}
-expect('python desktop png', $py_code === 0 && tagui_png_file($py_out), true);}
+expect('python desktop png', $py_code === 0 && tagui_png_file($py_out, 101), true);}
+$shot_root = sys_get_temp_dir() . '/tagui-shot-bin-' . getmypid();
+$shot_out = sys_get_temp_dir() . '/tagui-shot-out-' . getmypid();
+@mkdir($shot_root, 0700, true);
+@mkdir($shot_out, 0700, true);
+$shot_sample = $shot_root . '/sample.png';
+file_put_contents($shot_sample, "\x89PNG\r\n\x1a\n" . str_repeat("\0", 128));
+$shot_kept = $shot_out . '/failure_desktop.png';
+$shot_marker = $shot_out . '/scrot-ran';
+file_put_contents($shot_root . '/import', "#!/bin/sh\n/bin/cp " . escapeshellarg($shot_sample) . " \"\$3\"\nexit 1\n");
+file_put_contents($shot_root . '/scrot', "#!/bin/sh\ntouch " . escapeshellarg($shot_marker) . "\nexit 0\n");
+chmod($shot_root . '/import', 0755);
+chmod($shot_root . '/scrot', 0755);
+$saved_shot_path = getenv('PATH');
+$saved_shot_display = getenv('DISPLAY');
+putenv('PATH=' . $shot_root);
+putenv('DISPLAY=:99');
+expect('nonzero exit keeps png', tagui_capture_desktop($shot_kept), true);
+expect('nonzero exit png bytes', tagui_png_file($shot_kept, 101), true);
+expect('earlier tool wins', is_file($shot_marker), false);
+file_put_contents($shot_root . '/import', "#!/bin/sh\nprintf 'not-a-png-file-padding-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' > \"\$3\"\nexit 0\n");
+file_put_contents($shot_root . '/scrot', "#!/bin/sh\n/bin/cp " . escapeshellarg($shot_sample) . " \"\$1\"\nexit 1\n");
+chmod($shot_root . '/import', 0755);
+chmod($shot_root . '/scrot', 0755);
+@unlink($shot_kept);
+expect('corrupt import falls through', tagui_capture_desktop($shot_kept), true);
+expect('later tool png', tagui_png_file($shot_kept, 101), true);
+file_put_contents($shot_root . '/import', "#!/bin/sh\nexit 1\n");
+file_put_contents($shot_root . '/scrot', "#!/bin/sh\nprintf nope > \"\$1\"\nexit 0\n");
+chmod($shot_root . '/import', 0755);
+chmod($shot_root . '/scrot', 0755);
+@unlink($shot_kept);
+expect('bad shots are dropped', tagui_capture_desktop($shot_kept), false);
+expect('bad shot leaves no file', is_file($shot_kept), false);
+$tiny_png = $shot_out . '/tiny.png';
+file_put_contents($tiny_png, "\x89PNG\r\n\x1a\n");
+expect('tiny png rejected', tagui_png_file($tiny_png, 101), false);
+expect('bounded exit 0', tagui_run_bounded(array(PHP_BINARY, '-r', 'exit(0);'), 3), 0);
+expect('bounded exit 3', tagui_run_bounded(array(PHP_BINARY, '-r', 'exit(3);'), 3), 3);
+if ($saved_shot_path !== false && $saved_shot_path !== '') putenv('PATH=' . $saved_shot_path);
+else putenv('PATH');
+if (is_string($saved_shot_display) && $saved_shot_display !== '') putenv('DISPLAY=' . $saved_shot_display);
+else putenv('DISPLAY');
 
 foreach (array('tagui_modern.php', 'tagui_steps.php', 'tagui_runtime.php') as $source_name) {
 $source = file_get_contents(dirname(__DIR__) . '/' . $source_name);
