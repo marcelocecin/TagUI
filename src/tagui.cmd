@@ -19,6 +19,7 @@ echo.
 echo chrome   - run on visible Chrome web browser instead of invisible PhantomJS ^(first install Chrome^)
 echo headless - run on invisible Chrome web browser instead of default PhantomJS ^(first install Chrome^)
 echo modern   - run on Chrome through the DevTools Protocol, without CasperJS or PhantomJS
+echo browserclaw - run on visible BrowserOS neo through the DevTools engine ^(attach to a live browserclaw, or start one^)
 echo firefox  - run on visible Firefox web browser instead of invisible browser ^(first install Firefox^)
 echo report   - track run result in tagui\src\tagui_report.csv and save html log of automation execution
 echo upload   - upload automation flow and result to hastebin.com ^(expires 30 days after last view^)
@@ -472,6 +473,56 @@ if "%arg8%"=="modern" (
 if "%arg9%"=="modern" (
 	set arg9=
 	set tagui_modern_mode=true
+)
+
+rem browserclaw is visible BrowserOS neo on the modern engine
+if "%arg2%"=="browserclaw" (
+	set arg2=
+	set tagui_web_browser=browserclaw
+	set tagui_modern_mode=true
+	set TAGUI_BROWSER=browserclaw
+)
+if "%arg3%"=="browserclaw" (
+	set arg3=
+	set tagui_web_browser=browserclaw
+	set tagui_modern_mode=true
+	set TAGUI_BROWSER=browserclaw
+)
+if "%arg4%"=="browserclaw" (
+	set arg4=
+	set tagui_web_browser=browserclaw
+	set tagui_modern_mode=true
+	set TAGUI_BROWSER=browserclaw
+)
+if "%arg5%"=="browserclaw" (
+	set arg5=
+	set tagui_web_browser=browserclaw
+	set tagui_modern_mode=true
+	set TAGUI_BROWSER=browserclaw
+)
+if "%arg6%"=="browserclaw" (
+	set arg6=
+	set tagui_web_browser=browserclaw
+	set tagui_modern_mode=true
+	set TAGUI_BROWSER=browserclaw
+)
+if "%arg7%"=="browserclaw" (
+	set arg7=
+	set tagui_web_browser=browserclaw
+	set tagui_modern_mode=true
+	set TAGUI_BROWSER=browserclaw
+)
+if "%arg8%"=="browserclaw" (
+	set arg8=
+	set tagui_web_browser=browserclaw
+	set tagui_modern_mode=true
+	set TAGUI_BROWSER=browserclaw
+)
+if "%arg9%"=="browserclaw" (
+	set arg9=
+	set tagui_web_browser=browserclaw
+	set tagui_modern_mode=true
+	set TAGUI_BROWSER=browserclaw
 )
 
 rem concatenate parameters in order to fix issue when calling casperjs test
