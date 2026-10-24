@@ -480,6 +480,8 @@ expect('official args', $official['args'], array(
 '--remote-debugging-port=9333',
 '--user-data-dir=' . dirname(__DIR__) . '/chrome/tagui_user_profile',
 '--window-size=1366,842',
+'--no-first-run',
+'--no-default-browser-check',
 'about:blank'));
 expect('official persistent', $official['persistent'], true);
 $official_line = implode("\n", $official['args']);
@@ -1011,7 +1013,7 @@ $status = proc_get_status($proc);
 return is_array($status) && !empty($status['running']);}
 
 $browserclaw_saved = array();
-foreach (array('HOME', 'TAGUI_BROWSER', 'TAGUI_CDP_PORT', 'TAGUI_BROWSERCLAW_PROFILE', 'TAGUI_CHROME_BIN', 'TAGUI_CHROME_PROFILE', 'TAGUI_CHROME_ISOLATED', 'tagui_web_browser', 'LD_LIBRARY_PATH') as $browserclaw_name) {
+foreach (array('HOME', 'TAGUI_BROWSER', 'TAGUI_CDP_PORT', 'TAGUI_BROWSERCLAW_PROFILE', 'TAGUI_BROWSERCLAW_BIN', 'TAGUI_CHROME_BIN', 'TAGUI_CHROME_PROFILE', 'TAGUI_CHROME_ISOLATED', 'tagui_web_browser', 'LD_LIBRARY_PATH') as $browserclaw_name) {
 $browserclaw_value = getenv($browserclaw_name);
 $browserclaw_saved[$browserclaw_name] = $browserclaw_value === false ? null : $browserclaw_value;
 putenv($browserclaw_name);}
@@ -1052,6 +1054,8 @@ expect('chrome stable stays first', $plain[0], 'google-chrome-stable');
 expect('opt chrome stays second', $plain[1], '/opt/google/chrome/chrome');
 $claw_bins = tagui_browserclaw_binary_candidates();
 expect('browserclaw is the fallback', array_slice($plain, -count($claw_bins)), $claw_bins);
+expect('home bin is a browserclaw candidate', $claw_bins[0], $home . '/.local/bin/browserclaw');
+expect('usr bin is a browserclaw candidate', in_array('/usr/bin/browserclaw', $claw_bins, true), true);
 $preferred = $chooser->binary_candidates(true);
 expect('browserclaw requested is first', array_slice($preferred, 0, count($claw_bins)), $claw_bins);
 expect('chrome follows browserclaw', $preferred[count($claw_bins)], 'google-chrome-stable');
@@ -1071,7 +1075,34 @@ if ($resolved !== '') {$earlier_browser = true; break;}}
 if ($earlier_browser) expect('default binary is not browserclaw', str_contains((string)$default_binary, 'browserclaw'), false);
 putenv('TAGUI_CHROME_BIN=' . $binary);
 expect('explicit bin wins', (new TaguiChrome())->find_binary(), $binary);
+$chrome_dir = $home . '/opt/google/chrome';
+mkdir($chrome_dir, 0700, true);
+$chrome_file = $chrome_dir . '/chrome';
+file_put_contents($chrome_file, "#!/bin/sh\nexit 0\n");
+chmod($chrome_file, 0755);
+$worker = new TaguiChrome();
+$worker->browserclaw = true;
+putenv('TAGUI_BROWSER=browserclaw');
+putenv('TAGUI_CHROME_BIN=' . $chrome_file);
+putenv('TAGUI_BROWSERCLAW_BIN');
+expect('browserclaw mode ignores chrome bin', $worker->find_binary(), $binary);
+$dedicated = $home . '/bin/browserclaw-dedicated';
+mkdir(dirname($dedicated), 0700, true);
+file_put_contents($dedicated, "#!/bin/sh\nexit 0\n");
+chmod($dedicated, 0755);
+putenv('TAGUI_BROWSERCLAW_BIN=' . $dedicated);
+expect('browserclaw bin wins over chrome bin', $worker->find_binary(), $dedicated);
+putenv('TAGUI_BROWSERCLAW_BIN=/no/such/browserclaw');
+putenv('TAGUI_CHROME_BIN=' . $binary);
+expect('chrome bin used when it is browserclaw', $worker->find_binary(), $binary);
+$default_worker = new TaguiChrome();
+putenv('TAGUI_BROWSER');
+putenv('tagui_web_browser');
+putenv('TAGUI_BROWSERCLAW_BIN');
+putenv('TAGUI_CHROME_BIN=' . $chrome_file);
+expect('default mode keeps chrome bin', $default_worker->find_binary(), $chrome_file);
 putenv('TAGUI_CHROME_BIN');
+putenv('TAGUI_BROWSER');
 
 $fresh = array(
 tagui_test_target('iframe', 'chrome-untrusted://new-tab-page/new-tab.html', 'ws://iframe'),
@@ -1171,7 +1202,8 @@ $spawn->browserclaw = true;
 $spawn->http_map['GET http://127.0.0.1:9444/json/version'] = '';
 putenv('TAGUI_BROWSER=browserclaw');
 putenv('TAGUI_BROWSERCLAW_PROFILE=' . $state_dir);
-putenv('TAGUI_CHROME_BIN=' . $binary);
+putenv('TAGUI_BROWSERCLAW_BIN');
+putenv('TAGUI_CHROME_BIN=' . $chrome_file);
 putenv('LD_LIBRARY_PATH=/usr/lib');
 $spawn_error = '';
 try {$spawn->start(false);}
@@ -1180,6 +1212,9 @@ expect('dead cdp port spawns', $spawn->spawns, 1);
 expect('dead cdp port reports the binary', str_contains($spawn_error, 'cannot start'), true);
 expect('spawn env prefixes lib dir', str_starts_with($spawn->spawned['env']['LD_LIBRARY_PATH'], dirname($binary) . ':/usr/lib'), true);
 expect('spawn keeps the browserclaw profile', in_array('--user-data-dir=' . $state_dir, $spawn->spawned['args'], true), true);
+expect('spawn uses browserclaw despite chrome bin', $spawn->spawned['args'][0], $binary);
+expect('spawn skips first run', in_array('--no-first-run', $spawn->spawned['args'], true), true);
+expect('spawn skips default browser check', in_array('--no-default-browser-check', $spawn->spawned['args'], true), true);
 expect('chrome binary has no lib path override', $spawn->spawn_environment('/opt/google/chrome/chrome'), null);
 putenv('LD_LIBRARY_PATH=' . dirname($binary) . ':/usr/lib');
 $once = $spawn->spawn_environment($binary);
@@ -1226,6 +1261,8 @@ expect('browserclaw plan profile', $browserclaw_plan['profile'], '/data/browser-
 expect('browserclaw plan persistent', $browserclaw_plan['persistent'], true);
 expect('browserclaw plan visible', in_array('--headless', $browserclaw_plan['args'], true), false);
 expect('browserclaw plan allows devtools', in_array('--remote-allow-origins=*', $browserclaw_plan['args'], true), true);
+expect('browserclaw plan skips first run', in_array('--no-first-run', $browserclaw_plan['args'], true), true);
+expect('browserclaw plan skips default browser check', in_array('--no-default-browser-check', $browserclaw_plan['args'], true), true);
 putenv('TAGUI_BROWSER');
 putenv('tagui_web_browser');
 expect('browserclaw arg requests the mode', tagui_browserclaw_requested(array('quiet', 'browserclaw')), true);

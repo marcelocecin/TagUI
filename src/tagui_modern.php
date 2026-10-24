@@ -83,8 +83,11 @@ $list = array();
 $home = getenv('HOME');
 if (!is_string($home) || $home === '') $home = getenv('USERPROFILE');
 if (is_string($home) && $home !== '') {
-$list[] = rtrim($home, "\\/") . '/.local/opt/browserclaw/usr/lib/browserclaw/browserclaw';}
+$root = rtrim($home, "\\/");
+$list[] = $root . '/.local/bin/browserclaw';
+$list[] = $root . '/.local/opt/browserclaw/usr/lib/browserclaw/browserclaw';}
 $list[] = '/usr/lib/browserclaw/browserclaw';
+$list[] = '/usr/bin/browserclaw';
 $list[] = 'browserclaw';
 return $list;}
 
@@ -299,6 +302,7 @@ $binary,
 '--user-data-dir=' . $profile,
 '--window-size=1366,842');
 if ($headless) {array_push($args, '--headless', '--disable-gpu');}
+array_push($args, '--no-first-run', '--no-default-browser-check');
 $args[] = 'about:blank';
 return array('profile' => $profile, 'persistent' => true, 'args' => $args);}
 
@@ -320,6 +324,7 @@ $binary,
 '--user-data-dir=' . $profile,
 '--window-size=1366,842');
 if ($headless) {array_push($args, '--headless', '--disable-gpu');}
+array_push($args, '--no-first-run', '--no-default-browser-check');
 $args[] = 'about:blank';
 return array('profile' => $profile, 'persistent' => true, 'args' => $args);}
 
@@ -807,9 +812,20 @@ catch (Exception $e) {return '';}
 finally {try {$client->close();} catch (Exception $e) {}}}
 
 function find_binary() {
+if ($this->browserclaw_mode()) {
+$claw_bin = getenv('TAGUI_BROWSERCLAW_BIN');
+if (is_string($claw_bin)) $claw_bin = trim($claw_bin);
+if (is_string($claw_bin) && $claw_bin !== '' && is_file($claw_bin)) return tagui_unwrap_chromium($claw_bin);
+$from_env = getenv('TAGUI_CHROME_BIN');
+if (is_string($from_env) && $from_env !== '' && is_file($from_env) && stripos($from_env, 'browserclaw') !== false) {
+return tagui_unwrap_chromium($from_env);}
+return $this->resolve_binary(tagui_browserclaw_binary_candidates());}
 $from_env = getenv('TAGUI_CHROME_BIN');
 if (is_string($from_env) && $from_env !== '' && is_file($from_env)) return tagui_unwrap_chromium($from_env);
-foreach ($this->binary_candidates($this->browserclaw_mode()) as $candidate) {
+return $this->resolve_binary($this->binary_candidates(false));}
+
+function resolve_binary($candidates) {
+foreach ($candidates as $candidate) {
 if ($candidate === '') continue;
 if (str_contains($candidate, DIRECTORY_SEPARATOR) || str_contains($candidate, '/')) {
 if (is_file($candidate)) return tagui_unwrap_chromium($candidate);
