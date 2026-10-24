@@ -465,8 +465,14 @@ expect('repo iteration', tagui_repo_identifier('[iteration]'), 'iteration');
 
 $saved_profile = getenv('TAGUI_CHROME_PROFILE');
 $saved_isolated = getenv('TAGUI_CHROME_ISOLATED');
+$saved_browser = getenv('TAGUI_BROWSER');
+$saved_web = getenv('tagui_web_browser');
+$saved_claw = getenv('TAGUI_BROWSERCLAW_PROFILE');
 putenv('TAGUI_CHROME_PROFILE');
 putenv('TAGUI_CHROME_ISOLATED');
+putenv('TAGUI_BROWSER');
+putenv('tagui_web_browser');
+putenv('TAGUI_BROWSERCLAW_PROFILE');
 $launcher = new TaguiChrome();
 $official = $launcher->launch_plan('/usr/bin/google-chrome', 9333, false);
 expect('official args', $official['args'], array(
@@ -497,6 +503,12 @@ if (is_string($saved_profile) && $saved_profile !== '') putenv('TAGUI_CHROME_PRO
 else putenv('TAGUI_CHROME_PROFILE');
 if (is_string($saved_isolated) && $saved_isolated !== '') putenv('TAGUI_CHROME_ISOLATED=' . $saved_isolated);
 else putenv('TAGUI_CHROME_ISOLATED');
+if (is_string($saved_browser) && $saved_browser !== '') putenv('TAGUI_BROWSER=' . $saved_browser);
+else putenv('TAGUI_BROWSER');
+if (is_string($saved_web) && $saved_web !== '') putenv('tagui_web_browser=' . $saved_web);
+else putenv('tagui_web_browser');
+if (is_string($saved_claw) && $saved_claw !== '') putenv('TAGUI_BROWSERCLAW_PROFILE=' . $saved_claw);
+else putenv('TAGUI_BROWSERCLAW_PROFILE');
 
 $typed = tagui_type_events('a[enter][tab][esc][backspace] ');
 $typed_view = array();
@@ -942,6 +954,296 @@ foreach (array('tagui_modern.php', 'tagui_steps.php', 'tagui_runtime.php') as $s
 $source = file_get_contents(dirname(__DIR__) . '/' . $source_name);
 expect($source_name . ' no curl', str_contains($source, 'curl_'), false);
 expect($source_name . ' no DOMDocument', str_contains($source, 'DOMDocument'), false);}
+
+class TaguiFakeSocket {
+public $closed = false;
+function close() {$this->closed = true;}}
+
+class BrowserclawHarness extends TaguiChrome {
+public $spawns = 0;
+public $spawned = null;
+public $requests = array();
+public $http_map = array();
+public $socket = null;
+public $connected = '';
+protected function open_process($args, $descriptor, &$pipes, $env) {
+$this->spawns++;
+$this->spawned = array('args' => $args, 'env' => $env);
+return false;}
+protected function http_request($method, $url, $timeout = 2) {
+$this->requests[] = $method . ' ' . $url;
+$key = $method . ' ' . $url;
+if (isset($this->http_map[$key])) return $this->http_map[$key];
+return '';}
+protected function connect_devtools($ws) {
+$this->connected = $ws;
+$this->ws_url = $ws;
+$this->socket = new TaguiFakeSocket();
+$this->client = $this->socket;}}
+
+function tagui_test_target($type, $url, $ws) {
+return array('type' => $type, 'url' => $url, 'id' => $ws, 'webSocketDebuggerUrl' => $ws);}
+
+function tagui_test_claw_server($profile) {
+$marker = $profile . '/.browseros/config.json';
+if (!is_dir(dirname($marker))) mkdir(dirname($marker), 0700, true);
+$argv0 = 'browseros-claw-server --config=' . $marker;
+$descriptor = array(
+0 => array('file', '/dev/null', 'r'),
+1 => array('file', '/dev/null', 'w'),
+2 => array('file', '/dev/null', 'w'));
+$pipes = array();
+$proc = proc_open(array('bash', '-c', 'exec -a ' . escapeshellarg($argv0) . ' sleep 120'), $descriptor, $pipes);
+if (!is_resource($proc)) return null;
+$status = proc_get_status($proc);
+$pid = is_array($status) ? (int)$status['pid'] : 0;
+$seen = false;
+$deadline = microtime(true) + 2;
+while ($pid > 0 && microtime(true) < $deadline) {
+$raw = @file_get_contents('/proc/' . $pid . '/cmdline');
+if (is_string($raw) && str_contains($raw, 'browseros-claw-server') && str_contains($raw, $marker)) {$seen = true; break;}
+usleep(20000);}
+return array('proc' => $proc, 'pid' => $pid, 'seen' => $seen);}
+
+function tagui_test_proc_running($proc) {
+if (!is_resource($proc)) return false;
+$status = proc_get_status($proc);
+return is_array($status) && !empty($status['running']);}
+
+$browserclaw_saved = array();
+foreach (array('HOME', 'TAGUI_BROWSER', 'TAGUI_CDP_PORT', 'TAGUI_BROWSERCLAW_PROFILE', 'TAGUI_CHROME_BIN', 'TAGUI_CHROME_PROFILE', 'TAGUI_CHROME_ISOLATED', 'tagui_web_browser', 'LD_LIBRARY_PATH') as $browserclaw_name) {
+$browserclaw_value = getenv($browserclaw_name);
+$browserclaw_saved[$browserclaw_name] = $browserclaw_value === false ? null : $browserclaw_value;
+putenv($browserclaw_name);}
+$browserclaw_procs = array();
+try {
+$state_dir = sys_get_temp_dir() . '/tagui_bc_state_' . getmypid() . '_' . bin2hex(random_bytes(3));
+mkdir($state_dir, 0700, true);
+$state_file = $state_dir . '/Local State';
+file_put_contents($state_file, json_encode(array(
+'browseros' => array('server' => array('cdp_port' => 9113, 'mcp_port' => 9210, 'proxy_port' => 9010)))));
+expect('local state cdp port', tagui_browserclaw_cdp_port($state_dir), 9113);
+file_put_contents($state_file, "\xEF\xBB\xBF" . json_encode(array('browseros' => array('server' => array('cdp_port' => '9220')))));
+expect('local state string port', tagui_browserclaw_cdp_port($state_dir), 9220);
+file_put_contents($state_file, json_encode(array('browseros' => array('server' => array('mcp_port' => 9210)))));
+expect('local state missing cdp', tagui_browserclaw_cdp_port($state_dir), 0);
+file_put_contents($state_file, json_encode(array('browseros' => array('server' => array('cdp_port' => 0)))));
+expect('local state zero port', tagui_browserclaw_cdp_port($state_dir), 0);
+file_put_contents($state_file, json_encode(array('browseros' => array('server' => array('cdp_port' => 70000)))));
+expect('local state huge port', tagui_browserclaw_cdp_port($state_dir), 0);
+file_put_contents($state_file, '{not json');
+expect('local state bad json', tagui_browserclaw_cdp_port($state_dir), 0);
+expect('local state missing file', tagui_browserclaw_cdp_port($state_dir . '/absent'), 0);
+expect('port 9113', tagui_port_number('9113'), 9113);
+expect('port zero', tagui_port_number('0'), 0);
+expect('port overflow', tagui_port_number('65536'), 0);
+expect('port junk', tagui_port_number('9113abc'), 0);
+
+$home = sys_get_temp_dir() . '/tagui_bc_home_' . getmypid() . '_' . bin2hex(random_bytes(3));
+$bin_dir = $home . '/.local/opt/browserclaw/usr/lib/browserclaw';
+mkdir($bin_dir, 0700, true);
+$binary = $bin_dir . '/browserclaw';
+file_put_contents($binary, "#!/bin/sh\nexit 0\n");
+chmod($binary, 0755);
+putenv('HOME=' . $home);
+$chooser = new TaguiChrome();
+$plain = $chooser->binary_candidates(false);
+expect('chrome stable stays first', $plain[0], 'google-chrome-stable');
+expect('opt chrome stays second', $plain[1], '/opt/google/chrome/chrome');
+$claw_bins = tagui_browserclaw_binary_candidates();
+expect('browserclaw is the fallback', array_slice($plain, -count($claw_bins)), $claw_bins);
+$preferred = $chooser->binary_candidates(true);
+expect('browserclaw requested is first', array_slice($preferred, 0, count($claw_bins)), $claw_bins);
+expect('chrome follows browserclaw', $preferred[count($claw_bins)], 'google-chrome-stable');
+$chooser->browserclaw = true;
+expect('browserclaw mode binary', $chooser->find_binary(), $binary);
+$chooser->browserclaw = false;
+$default_binary = $chooser->find_binary();
+$earlier_browser = false;
+foreach ($chooser->binary_candidates(false) as $candidate) {
+if (str_contains($candidate, 'browserclaw')) break;
+if ($candidate === '') continue;
+if (str_contains($candidate, '/') || str_contains($candidate, DIRECTORY_SEPARATOR)) {
+if (is_file($candidate)) {$earlier_browser = true; break;}
+continue;}
+$resolved = trim((string)shell_exec('command -v ' . escapeshellarg($candidate) . ' 2>/dev/null'));
+if ($resolved !== '') {$earlier_browser = true; break;}}
+if ($earlier_browser) expect('default binary is not browserclaw', str_contains((string)$default_binary, 'browserclaw'), false);
+putenv('TAGUI_CHROME_BIN=' . $binary);
+expect('explicit bin wins', (new TaguiChrome())->find_binary(), $binary);
+putenv('TAGUI_CHROME_BIN');
+
+$fresh = array(
+tagui_test_target('iframe', 'chrome-untrusted://new-tab-page/new-tab.html', 'ws://iframe'),
+tagui_test_target('browser_ui', 'chrome://omnibox-popup.top-chrome/omnibox.html', 'ws://ui'),
+tagui_test_target('service_worker', 'chrome-extension://adlpneommgkgeanpaekgoaolcpncohkf/background.js', 'ws://sw'),
+tagui_test_target('page', 'chrome-untrusted://new-tab-page/new-tab.html', 'ws://untrusted-page'),
+tagui_test_target('page', 'chrome://newtab/', 'ws://newtab'));
+expect('fresh browseros uses newtab', tagui_pick_page_socket($fresh), 'ws://newtab');
+$with_real = $fresh;
+$with_real[] = tagui_test_target('page', 'https://example.com/', 'ws://real');
+expect('real page beats newtab', tagui_pick_page_socket($with_real), 'ws://real');
+$with_blank = $with_real;
+array_unshift($with_blank, tagui_test_target('page', 'about:blank', 'ws://blank'));
+expect('about blank still wins', tagui_pick_page_socket($with_blank), 'ws://blank');
+$noise = array(
+tagui_test_target('iframe', 'chrome-untrusted://new-tab-page/new-tab.html', 'ws://iframe'),
+tagui_test_target('browser_ui', 'chrome://omnibox-popup.top-chrome/omnibox.html', 'ws://ui'),
+tagui_test_target('service_worker', 'chrome-extension://adlpneommgkgeanpaekgoaolcpncohkf/background.js', 'ws://sw'),
+tagui_test_target('page', 'chrome-untrusted://new-tab-page/new-tab.html', 'ws://untrusted-page'));
+expect('noise targets are not pages', tagui_pick_page_socket($noise), '');
+expect('error page is a last resort', tagui_pick_page_socket(array(tagui_test_target('page', 'chrome-error://chromewebdata/', 'ws://error'))), 'ws://error');
+$newtab_error = array(tagui_test_target('page', 'chrome-error://chromewebdata/', 'ws://error'), tagui_test_target('page', 'chrome://newtab/', 'ws://newtab'));
+expect('newtab beats error page', tagui_pick_page_socket($newtab_error), 'ws://newtab');
+
+$spawn_filter = new ReflectionMethod('TaguiChrome', 'newest_spawn_id');
+$spawn_filter->setAccessible(true);
+$filter_chrome = new TaguiChrome();
+$spawn_infos = array(
+array('type' => 'page', 'targetId' => 'bad', 'openerId' => 'parent', 'url' => 'chrome-untrusted://new-tab-page/x'),
+array('type' => 'browser_ui', 'targetId' => 'ui', 'openerId' => 'parent', 'url' => 'chrome://omnibox-popup.top-chrome/x'),
+array('type' => 'page', 'targetId' => 'real', 'openerId' => 'parent', 'url' => 'https://example.com/next'));
+expect('spawn follows the real page', $spawn_filter->invoke($filter_chrome, $spawn_infos, 'parent'), 'real');
+expect('spawn ignores untrusted only', $spawn_filter->invoke($filter_chrome, array($spawn_infos[0]), 'parent'), '');
+$popup_filter = new ReflectionMethod('TaguiChrome', 'popup_url_matches');
+$popup_filter->setAccessible(true);
+expect('popup skips untrusted', $popup_filter->invoke($filter_chrome, 'chrome-untrusted://new-tab-page/x', 'new-tab'), false);
+expect('popup keeps a real url', $popup_filter->invoke($filter_chrome, 'https://example.com/new-tab', 'new-tab'), true);
+
+$failure = new BrowserclawHarness();
+$failure->port = 9113;
+$failure->ws_url = 'ws://real';
+$failure->http_map['GET http://127.0.0.1:9113/json/list'] = json_encode($with_real);
+$failure_pages = new ReflectionMethod('TaguiChrome', 'failure_pages');
+$failure_pages->setAccessible(true);
+$captured_pages = $failure_pages->invoke($failure);
+expect('failure tabs skip browseros noise', count($captured_pages), 1);
+expect('failure tab is the real page', $captured_pages[0]['url'], 'https://example.com/');
+
+$attach = new BrowserclawHarness();
+$attach->http_map['GET http://127.0.0.1:9113/json/list'] = json_encode($fresh);
+putenv('TAGUI_CDP_PORT=9113');
+$attach->start(true);
+expect('cdp attach does not spawn', $attach->spawns, 0);
+expect('cdp attach flag', $attach->attached, true);
+expect('cdp attach port', $attach->port, 9113);
+expect('cdp attach uses newtab', $attach->connected, 'ws://newtab');
+$attach_put = false;
+foreach ($attach->requests as $attach_request) {if (str_starts_with($attach_request, 'PUT ')) $attach_put = true;}
+expect('newtab does not open another page', $attach_put, false);
+$attach->stop();
+expect('attach stop closes the socket', $attach->socket->closed, true);
+expect('attach stop clears the flag', $attach->attached, false);
+expect('attach stop still does not spawn', $attach->spawns, 0);
+putenv('TAGUI_CDP_PORT');
+
+$created = new BrowserclawHarness();
+$created->http_map['GET http://127.0.0.1:9222/json/list'] = json_encode($noise);
+$created->http_map['PUT http://127.0.0.1:9222/json/new?about:blank'] = json_encode(array(
+'type' => 'page', 'url' => 'about:blank', 'id' => 'created', 'webSocketDebuggerUrl' => 'ws://created'));
+putenv('TAGUI_CDP_PORT=9222');
+$created->start(true);
+expect('empty window opens about blank', $created->connected, 'ws://created');
+expect('empty window does not spawn', $created->spawns, 0);
+$created->stop();
+putenv('TAGUI_CDP_PORT');
+
+file_put_contents($state_file, json_encode(array('browseros' => array('server' => array('cdp_port' => 9331)))));
+$live = new BrowserclawHarness();
+$live->browserclaw = true;
+$live->http_map['GET http://127.0.0.1:9331/json/version'] = '{"Browser":"Chrome/155.0.0.0","Protocol-Version":"1.3"}';
+$live->http_map['GET http://127.0.0.1:9331/json/list'] = json_encode(array(tagui_test_target('page', 'chrome://newtab/', 'ws://live-newtab')));
+putenv('TAGUI_BROWSER=browserclaw');
+putenv('TAGUI_BROWSERCLAW_PROFILE=' . $state_dir);
+$live->start(false);
+expect('live profile does not spawn', $live->spawns, 0);
+expect('live profile port', $live->port, 9331);
+expect('live profile page', $live->connected, 'ws://live-newtab');
+expect('live profile path', $live->profile, $state_dir);
+$live->stop();
+expect('live profile directory stays', is_dir($state_dir), true);
+putenv('TAGUI_BROWSER');
+putenv('TAGUI_BROWSERCLAW_PROFILE');
+
+file_put_contents($state_file, json_encode(array('browseros' => array('server' => array('cdp_port' => 9444)))));
+$spawn = new BrowserclawHarness();
+$spawn->browserclaw = true;
+$spawn->http_map['GET http://127.0.0.1:9444/json/version'] = '';
+putenv('TAGUI_BROWSER=browserclaw');
+putenv('TAGUI_BROWSERCLAW_PROFILE=' . $state_dir);
+putenv('TAGUI_CHROME_BIN=' . $binary);
+putenv('LD_LIBRARY_PATH=/usr/lib');
+$spawn_error = '';
+try {$spawn->start(false);}
+catch (RuntimeException $spawn_exception) {$spawn_error = $spawn_exception->getMessage();}
+expect('dead cdp port spawns', $spawn->spawns, 1);
+expect('dead cdp port reports the binary', str_contains($spawn_error, 'cannot start'), true);
+expect('spawn env prefixes lib dir', str_starts_with($spawn->spawned['env']['LD_LIBRARY_PATH'], dirname($binary) . ':/usr/lib'), true);
+expect('spawn keeps the browserclaw profile', in_array('--user-data-dir=' . $state_dir, $spawn->spawned['args'], true), true);
+expect('chrome binary has no lib path override', $spawn->spawn_environment('/opt/google/chrome/chrome'), null);
+putenv('LD_LIBRARY_PATH=' . dirname($binary) . ':/usr/lib');
+$once = $spawn->spawn_environment($binary);
+expect('lib path is not duplicated', $once['LD_LIBRARY_PATH'], dirname($binary) . ':/usr/lib');
+putenv('TAGUI_CHROME_BIN');
+putenv('TAGUI_BROWSER');
+putenv('TAGUI_BROWSERCLAW_PROFILE');
+
+$owned = sys_get_temp_dir() . '/tagui_bc_owned_' . getmypid() . '_' . bin2hex(random_bytes(3));
+mkdir($owned, 0700, true);
+$claw_server = tagui_test_claw_server($owned);
+$browserclaw_procs[] = $claw_server['proc'];
+$other = proc_open(array('sleep', '120'), array(0 => array('file', '/dev/null', 'r'), 1 => array('file', '/dev/null', 'w'), 2 => array('file', '/dev/null', 'w')), $other_pipes);
+$browserclaw_procs[] = $other;
+expect('claw server command is visible', $claw_server['seen'], true);
+$keep = new TaguiChrome();
+$keep->attached = true;
+$keep->persistent_profile = true;
+$keep->profile = $owned;
+$keep->stop();
+expect('attached stop leaves the claw server', tagui_test_proc_running($claw_server['proc']), true);
+expect('attached stop leaves the profile', is_dir($owned), true);
+$release = new TaguiChrome();
+$release->attached = false;
+$release->persistent_profile = true;
+$release->profile = $owned;
+$release->stop();
+$claw_gone = false;
+$wait_deadline = microtime(true) + 2;
+while (microtime(true) < $wait_deadline) {
+if (!tagui_test_proc_running($claw_server['proc'])) {$claw_gone = true; break;}
+usleep(50000);}
+expect('spawned stop kills the claw server', $claw_gone, true);
+expect('persistent profile is kept', is_dir($owned), true);
+expect('unrelated process stays up', tagui_test_proc_running($other), true);
+
+$plan = new TaguiChrome();
+$plan->browserclaw = true;
+putenv('TAGUI_BROWSERCLAW_PROFILE=/data/browser-claw');
+putenv('TAGUI_CHROME_PROFILE');
+putenv('TAGUI_CHROME_ISOLATED');
+$browserclaw_plan = $plan->launch_plan('/opt/browserclaw/browserclaw', 9113, false);
+expect('browserclaw plan profile', $browserclaw_plan['profile'], '/data/browser-claw');
+expect('browserclaw plan persistent', $browserclaw_plan['persistent'], true);
+expect('browserclaw plan visible', in_array('--headless', $browserclaw_plan['args'], true), false);
+expect('browserclaw plan allows devtools', in_array('--remote-allow-origins=*', $browserclaw_plan['args'], true), true);
+putenv('TAGUI_BROWSER');
+putenv('tagui_web_browser');
+expect('browserclaw arg requests the mode', tagui_browserclaw_requested(array('quiet', 'browserclaw')), true);
+expect('plain args do not request browserclaw', tagui_browserclaw_requested(array('quiet', 'modern')), false);
+list($flow_params, $flow_csv) = tagui_modern_flow_args(array('browserclaw', 'hello', 'rows.csv'));
+expect('browserclaw is not a flow parameter', $flow_params, array('hello'));
+expect('csv still passes through', $flow_csv, 'rows.csv');
+$tagui_script = file_get_contents(dirname(__DIR__) . '/tagui');
+expect('shell option sets browserclaw', str_contains($tagui_script, 'tagui_web_browser="browserclaw"'), true);
+expect('shell option exports the browser', str_contains($tagui_script, 'export TAGUI_BROWSER=browserclaw'), true);
+} finally {
+foreach ($browserclaw_procs as $browserclaw_proc) {
+if (!is_resource($browserclaw_proc)) continue;
+if (tagui_test_proc_running($browserclaw_proc)) proc_terminate($browserclaw_proc, 15);
+proc_close($browserclaw_proc);}
+foreach ($browserclaw_saved as $browserclaw_name => $browserclaw_value) {
+if ($browserclaw_value === null) putenv($browserclaw_name);
+else putenv($browserclaw_name . '=' . $browserclaw_value);}}
 
 if ($failures > 0) {fwrite(STDERR, "$failures failed\n"); exit(1);}
 fwrite(STDOUT, "all logic checks passed\n");

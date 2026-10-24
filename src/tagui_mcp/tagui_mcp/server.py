@@ -64,10 +64,12 @@ def run_flow(
     """Run a TagUI flow file and return its output as JSON.
 
     flow_file is a local path. TagUI accepts no extension, or .txt, .js, .tag, or .tagui.
-    options are CLI flags: chrome, headless, firefox, quiet, report, speed, debug,
+    options are CLI flags: chrome, headless, firefox, browserclaw, quiet, report, speed, debug,
     test, baseline, upload, modern. Omit options to run in quiet mode on TagUI's
     default PhantomJS browser. Pass ["headless"] or ["chrome"] to use Chrome.
     Add "modern" to drive Chrome through the DevTools engine instead of CasperJS.
+    "browserclaw" is visible BrowserOS neo on that engine: it attaches to a live
+    browserclaw profile when its CDP port is open, and starts browserclaw otherwise.
     A failing run still reports failing_line, failing_step, and screenshots.
     inputs become flow variables p1, p2, ... and cannot contain whitespace.
     options, inputs, and an optional datatable csv share TagUI's limit of 8 extra arguments.

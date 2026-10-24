@@ -1,9 +1,11 @@
 <?php
 
 /* MODERN CHROME ENGINE FOR TAGUI ~ proof of concept
-   Drives Chrome or Edge directly with the DevTools Protocol.
+   Drives Chrome, Edge, or BrowserOS neo (browserclaw) with the DevTools Protocol.
    No CasperJS and no PhantomJS. The casperjs engine stays the default.
-   Invoked by `tagui flow modern` (headless Chrome unless `chrome` is also set). */
+   Invoked by `tagui flow modern` (headless Chrome unless `chrome` is also set).
+   `tagui flow browserclaw` is visible BrowserOS neo on the modern engine.
+   A live browserclaw CDP port is attached to; otherwise browserclaw is started. */
 
 if (!function_exists('str_starts_with')) {
 function str_starts_with($haystack, $needle) {
@@ -45,6 +47,110 @@ foreach ($candidates as $candidate) {
 $real = realpath($candidate);
 if (is_string($real) && tagui_is_elf($real)) return $real;}
 return $path;}
+
+function tagui_port_number($value) {
+if (is_string($value)) $value = trim($value);
+if (is_int($value)) $port = $value;
+else if (is_float($value)) {
+if ((int)$value != $value) return 0;
+$port = (int)$value;}
+else if (is_string($value) && preg_match('/^[0-9]{1,5}$/', $value) === 1) $port = (int)$value;
+else return 0;
+if ($port < 1 || $port > 65535) return 0;
+return $port;}
+
+function tagui_browserclaw_profile_path() {
+$env = getenv('TAGUI_BROWSERCLAW_PROFILE');
+if (is_string($env) && trim($env) !== '') return $env;
+$home = getenv('HOME');
+if (!is_string($home) || $home === '') $home = getenv('USERPROFILE');
+if (!is_string($home) || $home === '') return '';
+return rtrim($home, "\\/") . '/.config/browser-claw';}
+
+function tagui_browserclaw_cdp_port($profile) {
+if (!is_string($profile) || trim($profile) === '') return 0;
+$file = rtrim($profile, "\\/") . DIRECTORY_SEPARATOR . 'Local State';
+if (!is_file($file)) return 0;
+$raw = file_get_contents($file);
+if (!is_string($raw) || $raw === '') return 0;
+if (substr($raw, 0, 3) === "\xEF\xBB\xBF") $raw = substr($raw, 3);
+$data = json_decode($raw, true);
+if (!is_array($data) || !isset($data['browseros']['server']['cdp_port'])) return 0;
+return tagui_port_number($data['browseros']['server']['cdp_port']);}
+
+function tagui_browserclaw_binary_candidates() {
+$list = array();
+$home = getenv('HOME');
+if (!is_string($home) || $home === '') $home = getenv('USERPROFILE');
+if (is_string($home) && $home !== '') {
+$list[] = rtrim($home, "\\/") . '/.local/opt/browserclaw/usr/lib/browserclaw/browserclaw';}
+$list[] = '/usr/lib/browserclaw/browserclaw';
+$list[] = 'browserclaw';
+return $list;}
+
+function tagui_browserclaw_requested($argv = null) {
+if (getenv('TAGUI_BROWSER') === 'browserclaw') return true;
+if (getenv('tagui_web_browser') === 'browserclaw') return true;
+if (is_array($argv)) {
+foreach ($argv as $arg) {if ($arg === 'browserclaw') return true;}}
+return false;}
+
+function tagui_chrome_newtab_url($url) {
+$url = (string)$url;
+return str_starts_with($url, 'chrome://newtab') || str_starts_with($url, 'chrome://new-tab-page');}
+
+function tagui_internal_page_url($url) {
+$url = (string)$url;
+return str_starts_with($url, 'chrome://')
+|| str_starts_with($url, 'chrome-untrusted://')
+|| str_starts_with($url, 'devtools://')
+|| str_starts_with($url, 'chrome-extension://')
+|| str_starts_with($url, 'chrome-error://');}
+
+function tagui_skipped_page_url($url) {
+$url = (string)$url;
+return str_starts_with($url, 'chrome://')
+|| str_starts_with($url, 'chrome-untrusted://')
+|| str_starts_with($url, 'devtools://')
+|| str_starts_with($url, 'chrome-extension://');}
+
+function tagui_pick_page_socket($list) {
+if (!is_array($list)) return '';
+$blank = '';
+$real = '';
+$newtab = '';
+$other = '';
+foreach ($list as $target) {
+if (!is_array($target)) continue;
+$type = isset($target['type']) ? (string)$target['type'] : '';
+if ($type !== 'page') continue;
+if (empty($target['webSocketDebuggerUrl']) || !is_string($target['webSocketDebuggerUrl'])) continue;
+$url = isset($target['url']) ? (string)$target['url'] : '';
+if (str_starts_with($url, 'chrome-untrusted://')) continue;
+$ws = $target['webSocketDebuggerUrl'];
+if ($url === 'about:blank') {if ($blank === '') $blank = $ws; continue;}
+if (tagui_chrome_newtab_url($url)) {if ($newtab === '') $newtab = $ws; continue;}
+if (tagui_internal_page_url($url)) {if ($other === '') $other = $ws; continue;}
+if ($real === '') $real = $ws;}
+if ($blank !== '') return $blank;
+if ($real !== '') return $real;
+if ($newtab !== '') return $newtab;
+return $other;}
+
+function tagui_socket_from_target_payload($raw) {
+if (!is_string($raw)) return '';
+$trimmed = trim($raw);
+if ($trimmed === '') return '';
+if (str_starts_with($trimmed, 'ws://') || str_starts_with($trimmed, 'wss://')) return $trimmed;
+$data = json_decode($trimmed, true);
+if (!is_array($data)) return '';
+if (isset($data['webSocketDebuggerUrl']) && is_string($data['webSocketDebuggerUrl'])) {
+$type = isset($data['type']) ? (string)$data['type'] : 'page';
+$url = isset($data['url']) ? (string)$data['url'] : '';
+if ($type !== 'page' || str_starts_with($url, 'chrome-untrusted://')) return '';
+return $data['webSocketDebuggerUrl'];}
+if (isset($data[0]) && is_array($data[0])) return tagui_pick_page_socket($data);
+return '';}
 
 function tagui_key_event($type, $key, $code, $vk, $text = null, $modifiers = 0) {
 $event = array(
@@ -156,8 +262,10 @@ public $network_urls = array();
 public $surface_shots = true;
 public $download_path = '';
 public $persistent_profile = false;
-private $process = null;
-private $client = null;
+public $attached = false;
+public $browserclaw = false;
+protected $process = null;
+protected $client = null;
 private $next_id = 0;
 private $log_path = '';
 private $frame_stack = array();
@@ -171,7 +279,12 @@ function __construct() {}
 function official_profile_path() {
 return dirname(__FILE__) . DIRECTORY_SEPARATOR . 'chrome' . DIRECTORY_SEPARATOR . 'tagui_user_profile';}
 
+function browserclaw_mode() {
+if ($this->browserclaw) return true;
+return tagui_browserclaw_requested();}
+
 function launch_plan($binary, $port, $headless) {
+if ($this->browserclaw_mode()) return $this->browserclaw_launch_plan($binary, $port, $headless);
 $env_profile = getenv('TAGUI_CHROME_PROFILE');
 $custom = is_string($env_profile) && trim($env_profile) !== '';
 $isolated = getenv('TAGUI_CHROME_ISOLATED') === '1' && !$custom;
@@ -183,6 +296,27 @@ $profile = $custom ? $env_profile : $this->official_profile_path();
 $args = array(
 $binary,
 '--remote-debugging-port=' . $port,
+'--user-data-dir=' . $profile,
+'--window-size=1366,842');
+if ($headless) {array_push($args, '--headless', '--disable-gpu');}
+$args[] = 'about:blank';
+return array('profile' => $profile, 'persistent' => true, 'args' => $args);}
+
+function browserclaw_launch_plan($binary, $port, $headless) {
+$env_profile = getenv('TAGUI_BROWSERCLAW_PROFILE');
+if (!is_string($env_profile) || trim($env_profile) === '') $env_profile = getenv('TAGUI_CHROME_PROFILE');
+$custom = is_string($env_profile) && trim($env_profile) !== '';
+$isolated = getenv('TAGUI_CHROME_ISOLATED') === '1' && !$custom;
+if ($isolated) {
+$profile = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR .
+'tagui_modern_profile_' . getmypid() . '_' . bin2hex(random_bytes(4));
+return array('profile' => $profile, 'persistent' => false, 'args' => $this->isolated_args($binary, $port, $profile, $headless));}
+$profile = $custom ? $env_profile : tagui_browserclaw_profile_path();
+if ($profile === '') $profile = $this->official_profile_path();
+$args = array(
+$binary,
+'--remote-debugging-port=' . $port,
+'--remote-allow-origins=*',
 '--user-data-dir=' . $profile,
 '--window-size=1366,842');
 if ($headless) {array_push($args, '--headless', '--disable-gpu');}
@@ -223,9 +357,20 @@ return $args;}
 
 function start($headless) {
 $this->headless = $headless;
+$this->attached = false;
+$port = $this->cooperative_cdp_port();
+if ($port > 0) {
+$this->attached = true;
+$this->port = $port;
+$this->persistent_profile = true;
+$this->process = null;
+$this->finish_start($this->wait_for_page_socket());
+return;}
 $binary = $this->find_binary();
 if ($binary === '') {
-throw new RuntimeException('cannot find Chrome or Edge. Set TAGUI_CHROME_BIN to the browser executable');}
+$message = 'cannot find Chrome or Edge. Set TAGUI_CHROME_BIN to the browser executable';
+if ($this->browserclaw_mode()) $message .= ' (browserclaw)';
+throw new RuntimeException($message);}
 $this->port = $this->free_port();
 $plan = $this->launch_plan($binary, $this->port, $headless);
 $this->profile = $plan['profile'];
@@ -241,11 +386,38 @@ $descriptor = array(
 1 => array('file', $this->log_path, 'a'),
 2 => array('file', $this->log_path, 'a'));
 if (DIRECTORY_SEPARATOR === '\\') {$descriptor[0] = array('file', 'NUL', 'r');}
-$this->process = proc_open($args, $descriptor, $pipes);
+$pipes = array();
+$this->process = $this->open_process($args, $descriptor, $pipes, $this->spawn_environment($binary));
 if (!is_resource($this->process)) {
 throw new RuntimeException('cannot start ' . $binary);}
-$ws = $this->wait_for_page_socket();
+$this->finish_start($this->wait_for_page_socket());}
+
+function spawn_environment($binary) {
+if (!is_string($binary) || stripos($binary, 'browserclaw') === false) return null;
+$dir = dirname($binary);
+if ($dir === '' || $dir === '.' || $dir === DIRECTORY_SEPARATOR) return null;
+$env = getenv();
+if (!is_array($env)) $env = array();
+$clean = array();
+foreach ($env as $key => $value) {
+if (!is_string($key) || $key === '') continue;
+if (!is_string($value)) $value = is_scalar($value) ? (string)$value : '';
+$clean[$key] = $value;}
+$current = isset($clean['LD_LIBRARY_PATH']) ? $clean['LD_LIBRARY_PATH'] : '';
+$parts = $current === '' ? array() : explode(':', $current);
+if (!isset($parts[0]) || $parts[0] !== $dir) array_unshift($parts, $dir);
+$clean['LD_LIBRARY_PATH'] = implode(':', $parts);
+return $clean;}
+
+protected function open_process($args, $descriptor, &$pipes, $env) {
+if ($env === null) return proc_open($args, $descriptor, $pipes);
+return proc_open($args, $descriptor, $pipes, null, $env);}
+
+protected function finish_start($ws) {
 $this->ws_url = $ws;
+$this->connect_devtools($ws);}
+
+protected function connect_devtools($ws) {
 $this->client = new WebSocket\Client($ws, array('timeout' => 30, 'fragment_size' => 65536));
 $this->command('Page.enable', new stdClass());
 $this->command('Runtime.enable', new stdClass());
@@ -253,24 +425,87 @@ try {$this->command('Network.enable', new stdClass());} catch (Exception $e) {}
 try {$this->set_download_path(sys_get_temp_dir());} catch (Exception $e) {}
 $this->command('Page.bringToFront', new stdClass());}
 
+protected function cooperative_cdp_port() {
+$explicit = tagui_port_number(getenv('TAGUI_CDP_PORT'));
+if ($explicit > 0) return $explicit;
+$profile_env = getenv('TAGUI_BROWSERCLAW_PROFILE');
+$profile_set = is_string($profile_env) && trim($profile_env) !== '';
+if (!$this->browserclaw_mode() && !$profile_set) return 0;
+$profile = tagui_browserclaw_profile_path();
+if ($profile === '') return 0;
+$port = tagui_browserclaw_cdp_port($profile);
+if ($port < 1) return 0;
+if (!$this->cdp_alive($port)) return 0;
+$this->profile = $profile;
+return $port;}
+
+protected function cdp_alive($port) {
+$raw = $this->http_get('http://127.0.0.1:' . (int)$port . '/json/version', 2);
+if (!is_string($raw) || trim($raw) === '') return false;
+$data = json_decode($raw, true);
+if (!is_array($data)) return false;
+return isset($data['Browser']) || isset($data['webSocketDebuggerUrl']) || isset($data['Protocol-Version']);}
+
 function stop() {
 if ($this->client !== null) {
 try {$this->client->close();} catch (Exception $e) {}
 $this->client = null;}
-if (is_resource($this->process)) {
-$status = proc_get_status($this->process);
+$attached = $this->attached;
+$profile = $this->profile;
+$persistent = $this->persistent_profile;
+$process = $this->process;
+$this->attached = false;
+$this->process = null;
+$this->profile = '';
+$this->persistent_profile = false;
+$this->port = 0;
+$this->ws_url = '';
+if ($attached) return;
+if (is_resource($process)) {
+$status = proc_get_status($process);
 if (!empty($status['pid'])) {
 if (function_exists('posix_kill')) {@posix_kill((int)$status['pid'], 15);}
-else {proc_terminate($this->process);}
+else {proc_terminate($process);}
 }
-proc_close($this->process);
-$this->process = null;}
-if (!$this->persistent_profile && $this->profile !== '' && $this->profile !== '/' && str_contains($this->profile, 'tagui_modern_profile_')) {
+proc_close($process);}
+if ($profile !== '' && $profile !== '/') $this->stop_browseros_server($profile);
+if (!$persistent && $profile !== '' && $profile !== '/' && str_contains($profile, 'tagui_modern_profile_')) {
 if (DIRECTORY_SEPARATOR !== '\\') {
-@exec('pkill -f ' . escapeshellarg($this->profile) . ' >/dev/null 2>&1');}
-$this->remove_tree($this->profile);}
-$this->profile = '';
-$this->persistent_profile = false;}
+@exec('pkill -f ' . escapeshellarg($profile) . ' >/dev/null 2>&1');}
+$this->remove_tree($profile);}}
+
+protected function stop_browseros_server($profile) {
+$profile = rtrim(str_replace('\\', '/', (string)$profile), '/');
+if ($profile === '' || $profile === '/') return;
+$this->kill_browseros_matching($profile, $profile . '/.browseros');}
+
+protected function kill_browseros_matching($profile, $marker) {
+if (DIRECTORY_SEPARATOR === '\\') return;
+$me = function_exists('getmypid') ? (int)getmypid() : 0;
+foreach ($this->process_command_lines() as $line) {
+$line = trim($line);
+if ($line === '') continue;
+$space = strpos($line, ' ');
+if ($space === false) continue;
+$pid = (int)substr($line, 0, $space);
+$command = substr($line, $space + 1);
+if ($pid < 2 || $pid === $me) continue;
+if (!str_contains($command, 'browseros-claw-server')) continue;
+if (!str_contains($command, $marker) && !str_contains($command, $profile)) continue;
+$this->signal_pid($pid, 15);}}
+
+protected function process_command_lines() {
+$raw = @shell_exec('ps -ww -x -o pid=,args= 2>/dev/null');
+if (!is_string($raw) || trim($raw) === '') $raw = @shell_exec('ps -ww x -o pid=,command= 2>/dev/null');
+if (!is_string($raw) || $raw === '') return array();
+return explode("\n", $raw);}
+
+protected function signal_pid($pid, $signal) {
+$pid = (int)$pid;
+$signal = (int)$signal;
+if ($pid < 2) return;
+if (function_exists('posix_kill')) {@posix_kill($pid, $signal); return;}
+@exec('kill -' . $signal . ' ' . $pid . ' >/dev/null 2>&1');}
 
 function navigate($url) {
 $this->follow_newest_page();
@@ -439,7 +674,7 @@ foreach ($this->list_pages() as $target) {
 if (!is_array($target) || !isset($target['type']) || $target['type'] !== 'page') continue;
 if (empty($target['webSocketDebuggerUrl'])) continue;
 $url = isset($target['url']) ? (string)$target['url'] : '';
-if (str_starts_with($url, 'chrome://') || str_starts_with($url, 'devtools://') || str_starts_with($url, 'chrome-extension://')) continue;
+if (tagui_skipped_page_url($url)) continue;
 if ((string)$target['webSocketDebuggerUrl'] === $active) $first[] = $target;
 else $rest[] = $target;}
 return array_merge($first, $rest);}
@@ -518,21 +753,18 @@ finally {if ($this->client !== null && method_exists($this->client, 'setTimeout'
 private function wait_for_page_socket() {
 $deadline = microtime(true) + 20;
 $previous_timeout = ini_get('default_socket_timeout');
-ini_set('default_socket_timeout', '1');
+$opened = false;
 while (microtime(true) < $deadline) {
-$context = stream_context_create(array('http' => array('timeout' => 1)));
-$raw = @file_get_contents('http://127.0.0.1:' . $this->port . '/json/list', false, $context);
-if ($raw) {
+$raw = $this->http_get('http://127.0.0.1:' . $this->port . '/json/list', 1);
+if (is_string($raw) && $raw !== '') {
 $list = json_decode($raw, true);
-$fallback = '';
 if (is_array($list)) {
-foreach ($list as $target) {
-if (!isset($target['type']) || $target['type'] !== 'page' || empty($target['webSocketDebuggerUrl'])) continue;
-if (isset($target['url']) && $target['url'] === 'about:blank') {
-ini_set('default_socket_timeout', '30');
-return $target['webSocketDebuggerUrl'];}
-if ($fallback === '') $fallback = $target['webSocketDebuggerUrl'];}
-if ($fallback !== '') {ini_set('default_socket_timeout', '30'); return $fallback;}}}
+$ws = tagui_pick_page_socket($list);
+if ($ws !== '') {ini_set('default_socket_timeout', '30'); return $ws;}
+if ($this->attached && !$opened) {
+$opened = true;
+$ws = $this->open_blank_page();
+if ($ws !== '') {ini_set('default_socket_timeout', '30'); return $ws;}}}}
 $status = is_resource($this->process) ? proc_get_status($this->process) : null;
 if (is_array($status) && !$status['running']) break;
 usleep(100000);}
@@ -542,9 +774,51 @@ if ($this->log_path !== '' && is_file($this->log_path)) $log = trim((string)file
 if (strlen($log) > 500) $log = substr($log, -500);
 throw new RuntimeException('Chrome did not open a DevTools socket on port ' . $this->port . ($log !== '' ? ' ' . $log : ''));}
 
-private function find_binary() {
+protected function open_blank_page() {
+$base = 'http://127.0.0.1:' . (int)$this->port;
+foreach (array('PUT', 'GET') as $method) {
+$raw = $this->http_request($method, $base . '/json/new?about:blank', 3);
+$ws = tagui_socket_from_target_payload($raw);
+if ($ws !== '') return $ws;}
+$version = json_decode($this->http_get($base . '/json/version', 2), true);
+if (!is_array($version) || empty($version['webSocketDebuggerUrl']) || !is_string($version['webSocketDebuggerUrl'])) return '';
+$target_id = $this->browser_create_target($version['webSocketDebuggerUrl'], 'about:blank');
+if ($target_id === '') return '';
+$list = json_decode($this->http_get($base . '/json/list', 2), true);
+if (is_array($list)) {
+foreach ($list as $target) {
+if (!is_array($target) || empty($target['webSocketDebuggerUrl']) || !is_string($target['webSocketDebuggerUrl'])) continue;
+if (isset($target['id']) && (string)$target['id'] === $target_id) {
+$url = isset($target['url']) ? (string)$target['url'] : '';
+$type = isset($target['type']) ? (string)$target['type'] : '';
+if ($type === 'page' && !str_starts_with($url, 'chrome-untrusted://')) return $target['webSocketDebuggerUrl'];}}
+$picked = tagui_pick_page_socket($list);
+if ($picked !== '') return $picked;}
+return 'ws://127.0.0.1:' . (int)$this->port . '/devtools/page/' . $target_id;}
+
+protected function browser_create_target($ws, $url) {
+try {$client = new WebSocket\Client($ws, array('timeout' => 5, 'fragment_size' => 65536));}
+catch (Exception $e) {return '';}
+try {
+$result = $this->socket_call($client, 1, 'Target.createTarget', array('url' => $url), 5);
+if (is_array($result) && !empty($result['targetId'])) return (string)$result['targetId'];
+return '';}
+catch (Exception $e) {return '';}
+finally {try {$client->close();} catch (Exception $e) {}}}
+
+function find_binary() {
 $from_env = getenv('TAGUI_CHROME_BIN');
 if (is_string($from_env) && $from_env !== '' && is_file($from_env)) return tagui_unwrap_chromium($from_env);
+foreach ($this->binary_candidates($this->browserclaw_mode()) as $candidate) {
+if ($candidate === '') continue;
+if (str_contains($candidate, DIRECTORY_SEPARATOR) || str_contains($candidate, '/')) {
+if (is_file($candidate)) return tagui_unwrap_chromium($candidate);
+continue;}
+$found = $this->which($candidate);
+if ($found !== '') return tagui_unwrap_chromium($found);}
+return '';}
+
+function binary_candidates($browserclaw_first = false) {
 $candidates = array(
 'google-chrome-stable', '/opt/google/chrome/chrome',
 '/usr/lib/chromium/chromium', '/usr/lib/chromium-browser/chromium-browser',
@@ -567,14 +841,9 @@ $candidates[] = $pf86 . '\\Microsoft\\Edge\\Application\\msedge.exe';}
 if ($local) {
 $candidates[] = $local . '\\Google\\Chrome\\Application\\chrome.exe';
 $candidates[] = $local . '\\Microsoft\\Edge\\Application\\msedge.exe';}}
-foreach ($candidates as $candidate) {
-if ($candidate === '') continue;
-if (str_contains($candidate, DIRECTORY_SEPARATOR) || str_contains($candidate, '/')) {
-if (is_file($candidate)) return tagui_unwrap_chromium($candidate);
-continue;}
-$found = $this->which($candidate);
-if ($found !== '') return tagui_unwrap_chromium($found);}
-return '';}
+foreach (tagui_browserclaw_binary_candidates() as $candidate) $candidates[] = $candidate;
+if ($browserclaw_first) $candidates = array_merge(tagui_browserclaw_binary_candidates(), $candidates);
+return $candidates;}
 
 function push_frame($name) {
 $payload = json_encode($name, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -705,7 +974,7 @@ if (!is_array($info) || !isset($info['type']) || $info['type'] !== 'page') conti
 $id = isset($info['targetId']) ? (string)$info['targetId'] : '';
 if ($id === '' || isset($this->released_targets[$id])) continue;
 $url = isset($info['url']) ? (string)$info['url'] : '';
-if (str_starts_with($url, 'chrome://') || str_starts_with($url, 'devtools://') || str_starts_with($url, 'chrome-extension://')) continue;
+if (tagui_skipped_page_url($url)) continue;
 $opener = isset($info['openerId']) ? (string)$info['openerId'] : '';
 if ($opener === '') continue;
 if (!isset($children[$opener])) $children[$opener] = array();
@@ -761,7 +1030,7 @@ return null;}
 
 private function popup_url_matches($url, $keyword) {
 if ($url === '' || strcasecmp($url, 'about:blank') === 0) return false;
-if (str_starts_with($url, 'chrome://') || str_starts_with($url, 'devtools://') || str_starts_with($url, 'chrome-extension://') || str_starts_with($url, 'chrome-error://')) return false;
+if (tagui_skipped_page_url($url) || str_starts_with($url, 'chrome-error://')) return false;
 return stripos($url, $keyword) !== false;}
 
 private function accept_dialog() {
@@ -774,10 +1043,25 @@ try {$this->client->send($body);} catch (Exception $e) {}
 }
 
 private function list_pages() {
-$context = stream_context_create(array('http' => array('timeout' => 2)));
-$raw = @file_get_contents('http://127.0.0.1:' . $this->port . '/json/list', false, $context);
+$raw = $this->http_get('http://127.0.0.1:' . $this->port . '/json/list', 2);
 $list = json_decode((string)$raw, true);
 return is_array($list) ? $list : array();}
+
+protected function http_get($url, $timeout = 2) {
+return $this->http_request('GET', $url, $timeout);}
+
+protected function http_request($method, $url, $timeout = 2) {
+$timeout = max(1, (int)$timeout);
+$context = stream_context_create(array('http' => array(
+'method' => $method,
+'timeout' => $timeout,
+'ignore_errors' => true,
+'header' => "Connection: close\r\n")));
+$previous = ini_get('default_socket_timeout');
+ini_set('default_socket_timeout', (string)$timeout);
+try {$raw = @file_get_contents($url, false, $context);}
+finally {ini_set('default_socket_timeout', (string)$previous);}
+return is_string($raw) ? $raw : '';}
 
 private function which($name) {
 $paths = explode(PATH_SEPARATOR, (string)getenv('PATH'));
@@ -1946,6 +2230,16 @@ if ($handle === false) return;
 fwrite($handle, $text);
 fclose($handle);}
 
+function tagui_modern_flow_args($cli) {
+$csv_arg = '';
+$params = array();
+if (!is_array($cli)) return array($params, $csv_arg);
+foreach ($cli as $arg) {
+if ($arg === 'browserclaw') continue;
+if (is_string($arg) && strlen($arg) > 4 && substr(strtolower($arg), -4) === '.csv') $csv_arg = $arg;
+else if ($arg !== '') $params[] = $arg;}
+return array($params, $csv_arg);}
+
 function tagui_modern_main($argv) {
 ini_set('display_errors', 'stderr');
 while (ob_get_level() > 0) {ob_end_flush();}
@@ -1953,17 +2247,16 @@ ob_implicit_flush(true);
 if (!isset($argv[1]) || $argv[1] === '') {tagui_write_output("ERROR - specify flow filename as first parameter\n"); return 1;}
 $flow = $argv[1];
 if (!is_file($flow)) {tagui_write_output("ERROR - cannot find $flow\n"); return 1;}
+$cli = isset($argv[2]) ? array_slice($argv, 2) : array();
+$browserclaw = tagui_browserclaw_requested($cli);
 $browser = getenv('tagui_web_browser');
-if ($browser !== 'chrome' && $browser !== 'headless') $browser = 'headless';
+if ($browserclaw) $browser = 'chrome';
+else if ($browser !== 'chrome' && $browser !== 'headless') $browser = 'headless';
 $quiet = getenv('tagui_quiet_mode') === 'true';
 $chrome = new TaguiChrome();
+$chrome->browserclaw = $browserclaw;
 $engine = new TaguiModern($chrome, $quiet, dirname($flow));
-$cli = isset($argv[2]) ? array_slice($argv, 2) : array();
-$csv_arg = '';
-$params = array();
-foreach ($cli as $arg) {
-if (is_string($arg) && strlen($arg) > 4 && substr(strtolower($arg), -4) === '.csv') $csv_arg = $arg;
-else if ($arg !== '') $params[] = $arg;}
+list($params, $csv_arg) = tagui_modern_flow_args($cli);
 $engine->set_cli_params($params);
 try {$datasets = tagui_datatable_rows($flow, $csv_arg);}
 catch (Exception $e) {tagui_write_output('ERROR - ' . $e->getMessage() . "\n"); return 1;}

@@ -103,6 +103,11 @@ def test_run_flow_rejects_bad_usage(tmp_path: Path) -> None:
     modern = run_flow(str(flow), options=["headless", "modern", "quiet"], tagui_bin=FAKE)
     assert modern["ok"] is True
     assert "modern" in modern["command"]
+    browserclaw = run_flow(str(flow), options=["browserclaw", "quiet"], tagui_bin=FAKE)
+    assert browserclaw["ok"] is True
+    assert "browserclaw" in browserclaw["command"]
+    mixed = run_flow(str(flow), options=["browserclaw", "chrome"], tagui_bin=FAKE)
+    assert mixed["ok"] is False
     unknown = run_flow(str(flow), options=["sudo"], tagui_bin=FAKE)
     assert unknown["ok"] is False
     spaced = run_flow(str(flow), inputs=["has space"], tagui_bin=FAKE)

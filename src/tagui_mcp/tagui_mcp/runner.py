@@ -30,9 +30,10 @@ ALLOWED_OPTIONS = frozenset(
         "test",
         "baseline",
         "modern",
+        "browserclaw",
     }
 )
-BROWSER_OPTIONS = frozenset({"chrome", "headless", "firefox"})
+BROWSER_OPTIONS = frozenset({"chrome", "headless", "firefox", "browserclaw"})
 ALLOWED_EXTENSIONS = frozenset({"", "txt", "js", "tagui", "tag", "gui"})
 MAX_FORWARDED_ARGS = 8
 MAX_INPUTS = 16
@@ -94,7 +95,7 @@ def validate_options(options: list[str] | None) -> list[str]:
         chosen.append(option)
     browsers = [item for item in chosen if item in BROWSER_OPTIONS]
     if len(browsers) > 1:
-        raise TaguiFailure("choose only one of chrome, headless, firefox")
+        raise TaguiFailure("choose only one of chrome, headless, firefox, browserclaw")
     return chosen
 
 
