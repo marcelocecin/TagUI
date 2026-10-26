@@ -342,11 +342,26 @@ fi
 
 # start sikuli process if integration file is created during parsing
 if [ -f "tagui.sikuli/tagui_sikuli.in" ]; then
+# SikuliX stays the default: sikulix/sikulix.jar (SikuliX 2 sikulixapi, Java 8).
+# OculiX 4.0.0 is Java 17 bytecode. Set TAGUI_SIKULI_JAR to oculixide.jar to opt in.
+# TAGUI_JAVA or JAVA_HOME selects the java binary.
+tagui_java_bin="java"
+tagui_sikuli_jar="sikulix/sikulix.jar"
+tagui_sikuli_launch=$(php -q tagui_runtime.php --sikuli-launch)
+tagui_sikuli_code=$?
+if [ "$tagui_sikuli_code" -ne 0 ]; then
+printf '%s\n' "$tagui_sikuli_launch" | tee -a "$1".log
+exit 1
+fi
+tagui_java_bin=$(printf '%s\n' "$tagui_sikuli_launch" | sed -n '1p')
+tagui_sikuli_jar=$(printf '%s\n' "$tagui_sikuli_launch" | sed -n '2p')
+if [ -z "$tagui_java_bin" ]; then tagui_java_bin="java"; fi
+if [ -z "$tagui_sikuli_jar" ]; then tagui_sikuli_jar="sikulix/sikulix.jar"; fi
 # start dummy first run to let sikulix integrate jython
 if [ -f "sikulix/jython-standalone-2.7.1.jar" ]; then
-java -jar sikulix/sikulix.jar -h > /dev/null 2>&1 
+"$tagui_java_bin" -jar "$tagui_sikuli_jar" -h > /dev/null 2>&1 
 fi
-java -jar sikulix/sikulix.jar -r tagui.sikuli -d 3 >> tagui.sikuli/tagui.log 2>&1 &
+"$tagui_java_bin" -jar "$tagui_sikuli_jar" -r tagui.sikuli -d 3 >> tagui.sikuli/tagui.log 2>&1 &
 fi
 
 # start chrome processes if integration file is created during parsing
