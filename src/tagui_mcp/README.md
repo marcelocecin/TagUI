@@ -143,6 +143,9 @@ The repair loop is `create_flow` or `save_flow`, `validate_flow`, `run_workspace
 | `run_flow` | Run any flow file. Optional `options` (`quiet`, `headless`, `chrome`, `firefox`, `report`, `speed`, `debug`, `test`, `baseline`, `upload`), `inputs` (p1–p16), `datatable` (a csv), `timeout_seconds` |
 | `run_steps` | Write ad-hoc TagUI lines to a flow and run them. Returns `work_directory`, which is kept |
 | `save_session` | Write the live transcript to a workspace flow. `only_successful` drops steps that returned `ERROR` |
+| `list_files` | `directory`, `pattern` (glob), `limit` (default 50). Non-recursive, newest first, with `name`, `path`, `size`, `modified`, `mime`. No `directory` returns the allowed roots |
+| `file_info` | `path`, `chunk_size` (1024–1048576, default 32768). Returns `mime`, `size`, whole-file `sha256`, `modified`, `chunk_count` |
+| `read_file_chunk` | `path`, `index` (0-based), `chunk_size`. Returns `data` (base64 of that slice), `offset`, `length`, `chunk_sha256`, `chunk_count`, `is_last`, and the whole-file `size` and `sha256` |
 | `browser_start` | Start live mode on headless Chrome (`mode`: `headless` or `chrome`). `engine`: `casper` (default) or `modern` |
 | `browser_stop` | Send `done`, stop TagUI, and close TagUI's Chrome |
 | `browser_go` | Open an `http` or `https` URL and poll until the page location changes |
@@ -185,6 +188,20 @@ A flow run also returns:
 When a click or type times out, TagUI captures the page with `casper.capture(snap_image())` before exiting. That file shows up in `screenshots`. A failed live step also returns `url`, `title`, `text`, and `screenshot` while the browser is still open.
 
 The workspace is `TAGUI_WORKSPACE`, or `src/tagui_mcp/workspace` when that variable is unset. Flow names are a single file name. `.tagui` is added when the name has no extension.
+
+## Delivering a file to a remote agent
+
+A remote client cannot read the local disk, and a PDF does not fit in one tool result. Call `list_files` to find the file (for example the newest download), `file_info` for its `sha256` and `chunk_count`, then `read_file_chunk` for `index` 0 through `chunk_count - 1` with the same `chunk_size`. Base64-decode each `data`, join the parts in order, and check the result against `sha256`.
+
+Every part repeats the whole-file `sha256`. If it differs between parts, the file changed during the transfer; start over. Each part also carries `chunk_sha256` for that slice.
+
+These tools are read-only and never write, delete, or move a file. Access rules:
+
+- Only regular files under the allowed roots. `TAGUI_MCP_FILE_ROOTS` lists them separated by `os.pathsep` (`:` on Linux and macOS). When unset, the roots are the workspace and `~/Downloads`.
+- Paths are resolved with symlinks followed, so a symlink that points outside a root is refused, as is any path containing `..`. A relative path is looked up under each root.
+- `TAGUI_MCP_FILE_MAX_BYTES` caps the file size (default 52428800, 50 MiB).
+- `chunk_size` must be 1024 to 1048576. An out-of-range `index` is an error.
+- Each call hashes the whole file, which is fine at the size limit but not free.
 
 ## Authoring notes
 
@@ -248,6 +265,7 @@ Run that from a shell where `PYTHONPATH` includes `src/tagui_mcp`, or use the in
 src/tagui_mcp/
   tagui_mcp/server.py     MCP tools (stdio)
   tagui_mcp/http_transport.py  Streamable HTTP behind a bearer token
+  tagui_mcp/files.py      read-only chunked file delivery
   tagui_mcp/service.py    one-at-a-time flow runs and the live session
   tagui_mcp/runner.py     tagui CLI wrapper
   tagui_mcp/session.py    live-mode stdin/stdout protocol
