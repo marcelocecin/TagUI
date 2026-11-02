@@ -117,6 +117,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
+          draft: ${{ contains(github.ref_name, 'forktest') }}
+          prerelease: ${{ contains(github.ref_name, 'forktest') }}
           files: |
             TagUI_Windows.zip
             TagUI_macOS.zip
