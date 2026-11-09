@@ -150,7 +150,8 @@ def browser_click(selector: str, timeout_seconds: float = 45) -> str:
     "x, y" is not a selector for the page: a click at (x, y) is a desktop screen coordinate
     sent through the SikuliX/OculiX visual stack, so the browser window position and chrome
     (tab strip, address bar) shift it. ok is true when TagUI printed no ERROR line; it does
-    not prove the page changed, so read the page afterwards.
+    not prove the page changed, so read the page afterwards. frame reaches same-origin
+    iframes only; a cross-origin frame such as a captcha cannot be entered.
     """
     return _json(get_service().browser_click(selector, timeout_seconds=timeout_seconds))
 

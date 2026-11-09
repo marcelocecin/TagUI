@@ -95,17 +95,27 @@ def _resolve(raw: str, roots: list[Path]) -> Path:
     return resolved
 
 
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def output_path(
     roots: list[Path], raw: str = "", suffix: str = ".pdf", overwrite: bool = False
 ) -> Path:
     """Where a tool may write a new file: inside a root, right suffix, no symlink or directory target."""
     if not isinstance(raw, str):
         raise TaguiFailure("path must be a string")
-    if raw.strip() == "":
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        target = roots[0] / f"page-{stamp}{suffix}"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        return target.resolve()
+    generated = raw.strip() == ""
+    if generated:
+        roots[0].mkdir(parents=True, exist_ok=True)
+        stamp = _now().strftime("%Y%m%d-%H%M%S")
+        raw = f"page-{stamp}{suffix}"
+        for number in range(1, 1000):
+            if not os.path.lexists(roots[0] / raw):
+                break
+            raw = f"page-{stamp}-{number}{suffix}"
+        else:
+            raise TaguiFailure("could not find an unused default file name")
     if "\x00" in raw:
         raise TaguiFailure("path contains a null byte")
     candidate = Path(raw).expanduser()
@@ -124,7 +134,7 @@ def output_path(
         )
     if not resolved.parent.is_dir():
         raise TaguiFailure(f"directory does not exist: {resolved.parent}")
-    if resolved.exists() and not (resolved.is_file() and overwrite):
+    if os.path.lexists(resolved) and not (resolved.is_file() and overwrite):
         raise TaguiFailure(
             f"file already exists: {resolved}" if resolved.is_file() else f"not a regular file: {resolved}"
         )

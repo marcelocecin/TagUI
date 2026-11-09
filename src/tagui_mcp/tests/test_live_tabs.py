@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -103,6 +104,43 @@ def test_pdf_rejects_non_pdf_output_and_symlinks(tmp_path: Path, monkeypatch: py
         assert refused["ok"] is False
         assert "valid PDF" in str(refused["error"])
         assert not (tmp_path / "bad.pdf").exists()
+    finally:
+        service.close()
+
+
+def test_default_name_is_validated_and_never_overwrites(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import datetime, timezone
+
+    monkeypatch.setattr(files, "_now", lambda: datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc))
+    outside = tmp_path / "outside.pdf"
+    outside.write_bytes(b"keep")
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "page-20260102-030405.pdf").symlink_to(outside)
+    first = files.output_path([root], "  ")
+    assert first == root.resolve() / "page-20260102-030405-1.pdf"
+    first.write_bytes(b"x")
+    assert files.output_path([root], "") == root.resolve() / "page-20260102-030405-2.pdf"
+    assert outside.read_bytes() == b"keep"
+    with pytest.raises(TaguiFailure):
+        files.output_path([root], "page-20260102-030405.pdf", overwrite=True)
+
+
+def test_planted_partial_symlink_is_not_followed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    monkeypatch.setenv("TAGUI_MCP_FILE_ROOTS", str(root))
+    outside = tmp_path / "victim"
+    outside.write_text("keep")
+    for pid in (os.getpid(),):
+        (root / f".page.pdf.{pid}.part").symlink_to(outside)
+    service = _modern(root)
+    try:
+        saved = service.browser_pdf("page.pdf")
+        assert saved["ok"] is True
+        assert outside.read_text() == "keep"
+        assert (root / "page.pdf").read_bytes().startswith(b"%PDF-")
+        assert [p.name for p in root.iterdir() if p.name.endswith(".part") and not p.is_symlink()] == []
     finally:
         service.close()
 

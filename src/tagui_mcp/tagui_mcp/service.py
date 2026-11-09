@@ -11,6 +11,7 @@ import json
 import os
 import re
 import shutil
+import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -368,18 +369,26 @@ class TaguiService:
             )
             if "ERROR -" in output:
                 raise TaguiFailure(output.strip())
-            head = scratch.read_bytes()[:5] if scratch.is_file() else b""
-            if head != b"%PDF-":
+            if scratch.is_symlink() or not scratch.is_file():
                 raise TaguiFailure("Chrome did not return a valid PDF")
-            partial = target.with_name(f".{target.name}.{os.getpid()}.part")
-            try:
-                shutil.copyfile(scratch, partial)
-                os.replace(partial, target)
-            finally:
-                partial.unlink(missing_ok=True)
+            with scratch.open("rb") as source:
+                if source.read(5) != b"%PDF-":
+                    raise TaguiFailure("Chrome did not return a valid PDF")
+                source.seek(0)
+                # mkstemp creates a new random 0600 file (O_EXCL), so a planted name or symlink is never followed.
+                handle, partial_name = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".part")
+                partial = Path(partial_name)
+                try:
+                    with os.fdopen(handle, "wb") as sink:
+                        shutil.copyfileobj(source, sink)
+                    partial.chmod(0o644)
+                    size = partial.stat().st_size
+                    os.replace(partial, target)
+                finally:
+                    partial.unlink(missing_ok=True)
         finally:
             scratch.unlink(missing_ok=True)
-        return {"ok": True, "path": str(target), "size": target.stat().st_size}
+        return {"ok": True, "path": str(target), "size": size}
 
     def _page_state(self, timeout_seconds: float) -> dict[str, object]:
         self._ensure_running()
