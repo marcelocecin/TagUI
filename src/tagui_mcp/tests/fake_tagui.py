@@ -8,6 +8,8 @@ a time, with `done` exiting.
 
 from __future__ import annotations
 
+import base64
+import json
 import sys
 import time
 from pathlib import Path
@@ -75,8 +77,11 @@ def handle(line: str, state: dict[str, str]) -> None:
             state["title"] = "Example Domain"
             state["text"] = "Example Domain"
         else:
-            state["title"] = "Page"
+            state["title"] = "bad" if stripped.endswith("/bad") else "Page"
             state["text"] = "Page"
+        return
+    if stripped.startswith("mcp:"):
+        mcp(stripped, state)
         return
     if stripped.startswith("dump "):
         dump(stripped, state)
@@ -108,6 +113,33 @@ def handle(line: str, state: dict[str, str]) -> None:
         Path(stripped.split(" to ", 1)[1].strip()).write_bytes(b"png")
         return
     print(f"ERROR - cannot understand step {stripped}", flush=True)
+
+
+TABS = [
+    {"index": 0, "id": "T0", "url": "http://fixture/a", "title": "Alpha", "active": True},
+    {"index": 1, "id": "T1", "url": "http://fixture/b", "title": "Beta", "active": False},
+]
+
+
+def mcp(stripped: str, state: dict[str, str]) -> None:
+    """The modern engine's tab and PDF commands, for tests that run with -modern."""
+    if "-modern" not in sys.argv:
+        print("ERROR - cannot understand step " + stripped, flush=True)
+        return
+    parts = stripped.split(" ")
+    if parts[0] == "mcp:tabs":
+        Path(parts[1]).write_text(json.dumps({"tabs": TABS}), encoding="utf-8")
+    elif parts[0] == "mcp:switch":
+        wanted = json.loads(base64.b64decode(parts[1]))
+        hits = [t for t in TABS if wanted.get("index") == t["index"] or wanted.get("match", "\0") in (t["url"] + t["title"]).lower()]
+        if len(hits) != 1:
+            print("ERROR - no tab matches", flush=True)
+            return
+        for tab in TABS:
+            tab["active"] = tab is hits[0]
+        Path(parts[2]).write_text(json.dumps({"tab": hits[0]}), encoding="utf-8")
+    elif parts[0] == "mcp:pdf":
+        Path(parts[1]).write_bytes(b"%PDF-1.4\n%fake\n" if state["title"] != "bad" else b"nope")
 
 
 def dump(stripped: str, state: dict[str, str]) -> None:

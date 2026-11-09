@@ -95,6 +95,42 @@ def _resolve(raw: str, roots: list[Path]) -> Path:
     return resolved
 
 
+def output_path(
+    roots: list[Path], raw: str = "", suffix: str = ".pdf", overwrite: bool = False
+) -> Path:
+    """Where a tool may write a new file: inside a root, right suffix, no symlink or directory target."""
+    if not isinstance(raw, str):
+        raise TaguiFailure("path must be a string")
+    if raw.strip() == "":
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        target = roots[0] / f"page-{stamp}{suffix}"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        return target.resolve()
+    if "\x00" in raw:
+        raise TaguiFailure("path contains a null byte")
+    candidate = Path(raw).expanduser()
+    if ".." in candidate.parts:
+        raise TaguiFailure("path must not contain '..'")
+    if not candidate.is_absolute():
+        candidate = roots[0] / candidate
+    if candidate.suffix.lower() != suffix:
+        raise TaguiFailure(f"path must end with {suffix}")
+    if candidate.is_symlink():
+        raise TaguiFailure("path is a symbolic link")
+    resolved = candidate.parent.resolve() / candidate.name
+    if not _inside(resolved, roots):
+        raise TaguiFailure(
+            "path is outside the allowed roots: " + ", ".join(str(root) for root in roots)
+        )
+    if not resolved.parent.is_dir():
+        raise TaguiFailure(f"directory does not exist: {resolved.parent}")
+    if resolved.exists() and not (resolved.is_file() and overwrite):
+        raise TaguiFailure(
+            f"file already exists: {resolved}" if resolved.is_file() else f"not a regular file: {resolved}"
+        )
+    return resolved
+
+
 def _regular_file(raw: str, roots: list[Path]) -> tuple[Path, os.stat_result]:
     path = _resolve(raw, roots)
     if not path.exists():

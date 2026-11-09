@@ -26,6 +26,9 @@ INSTRUCTIONS = (
     "wait N and run work in live mode. check, frame, popup, if, for, while, and brace "
     "blocks are replayed as a flow because the live interpreter cannot compile them. "
     "save_session writes the live transcript into the workspace. "
+    "With engine modern, browser_tabs lists the open tabs, browser_switch_tab makes another one "
+    "the page later tools act on, and browser_pdf saves the current page as a PDF, all without "
+    "ending the session. "
     "Only one TagUI Chrome can run at a time. "
     "Flows run with the user's privileges, including any run or py steps in a flow file. "
     "A URL stored in a variable is a line that is just `url`. "
@@ -144,6 +147,10 @@ def browser_click(selector: str, timeout_seconds: float = 45) -> str:
     """Click an element in the live session.
 
     selector is a TagUI identifier: xpath, css, id, name, class, visible text, or href.
+    "x, y" is not a selector for the page: a click at (x, y) is a desktop screen coordinate
+    sent through the SikuliX/OculiX visual stack, so the browser window position and chrome
+    (tab strip, address bar) shift it. ok is true when TagUI printed no ERROR line; it does
+    not prove the page changed, so read the page afterwards.
     """
     return _json(get_service().browser_click(selector, timeout_seconds=timeout_seconds))
 
@@ -169,6 +176,42 @@ def browser_read(target: str = "page", timeout_seconds: float = 45) -> str:
 
 
 @mcp.tool()
+def browser_tabs(timeout_seconds: float = 20) -> str:
+    """List the open tabs of the live session (modern engine only).
+
+    Each tab has index, id, url, title, and active. index is the order a tab was first seen,
+    so it stays the same while the tab lives and closes shift later ones down. The session
+    keeps running. The casper engine reports that tabs are unsupported.
+    """
+    return _json(get_service().browser_tabs(timeout_seconds=timeout_seconds))
+
+
+@mcp.tool()
+def browser_switch_tab(index: int | None = None, query: str = "", timeout_seconds: float = 20) -> str:
+    """Make another tab the page that later browser tools act on (modern engine only).
+
+    Give either index (from browser_tabs) or query, a case-insensitive substring of the tab
+    URL or title. A query matching several tabs is refused; choose by index. A tab that
+    closed since browser_tabs is reported as an error. The live session is kept.
+    """
+    return _json(
+        get_service().browser_switch_tab(index, query, timeout_seconds=timeout_seconds)
+    )
+
+
+@mcp.tool()
+def browser_pdf(path: str = "", overwrite: bool = False, timeout_seconds: float = 120) -> str:
+    """Save the current page as a PDF with Chrome's printToPDF, backgrounds included (modern engine only).
+
+    path must end in .pdf and sit inside the allowed file roots (see list_files); a relative
+    path is under the workspace, and an empty path writes page-<time>.pdf there. An existing
+    file is kept unless overwrite is true. Returns path and size; fetch it with file_info and
+    read_file_chunk. A Chrome that refuses to print returns its error.
+    """
+    return _json(get_service().browser_pdf(path, overwrite, timeout_seconds=timeout_seconds))
+
+
+@mcp.tool()
 def page_state(timeout_seconds: float = 45) -> str:
     """Return the live page URL, title, and a truncated copy of the visible text."""
     return _json(get_service().page_state(timeout_seconds=timeout_seconds))
@@ -183,6 +226,10 @@ def browser_step(step: str, timeout_seconds: float = 45) -> str:
     check, frame, popup, if, for, while, and { } are run by replaying the session
     transcript as a real flow, which closes the live browser. A step starting with
     done is refused because that closes live mode.
+    ok is true when TagUI printed no ERROR line. It does not prove the DOM changed.
+    A click at x, y uses desktop screen coordinates through the SikuliX/OculiX visual stack,
+    not page coordinates, so browser chrome offsets matter. frame reaches same-origin iframes
+    only; a cross-origin frame such as a captcha cannot be entered.
     """
     return _json(get_service().browser_step(step, timeout_seconds=timeout_seconds))
 

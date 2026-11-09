@@ -166,6 +166,7 @@ private $popup_stack = array();
 private $released_targets = array();
 private $expect_spawn = false;
 private $following = false;
+private $tab_order = array();
 
 function __construct() {}
 
@@ -765,6 +766,87 @@ if ($url === '' || strcasecmp($url, 'about:blank') === 0) return false;
 if (str_starts_with($url, 'chrome://') || str_starts_with($url, 'devtools://') || str_starts_with($url, 'chrome-extension://') || str_starts_with($url, 'chrome-error://')) return false;
 return stripos($url, $keyword) !== false;}
 
+function tab_list() {
+$active = $this->page_target_id();
+$by_id = array();
+foreach ($this->list_pages() as $target) {
+if (!is_array($target) || !isset($target['type']) || $target['type'] !== 'page' || empty($target['id'])) continue;
+$url = isset($target['url']) ? (string)$target['url'] : '';
+if (str_starts_with($url, 'devtools://') || str_starts_with($url, 'chrome-extension://')) continue;
+$by_id[(string)$target['id']] = $target;}
+// Chrome lists targets most recently used first; keep the order a tab was first seen so an index stays put.
+$this->tab_order = array_values(array_filter($this->tab_order, function ($id) use ($by_id) {return isset($by_id[$id]);}));
+foreach ($by_id as $id => $target) {if (!in_array($id, $this->tab_order, true)) $this->tab_order[] = $id;}
+$tabs = array();
+foreach ($this->tab_order as $index => $id) {
+$target = $by_id[$id];
+$tabs[] = array(
+'index' => $index,
+'id' => $id,
+'url' => isset($target['url']) ? (string)$target['url'] : '',
+'title' => isset($target['title']) ? (string)$target['title'] : '',
+'active' => $id === $active,
+'ws' => isset($target['webSocketDebuggerUrl']) ? (string)$target['webSocketDebuggerUrl'] : '');}
+return $tabs;}
+
+function tab_switch($index, $match) {
+$tabs = $this->tab_list();
+if (count($tabs) === 0) throw new RuntimeException('no open tabs');
+$chosen = null;
+if ($index !== null) {
+if (!isset($tabs[$index])) throw new RuntimeException('no tab with index ' . $index . '; ' . count($tabs) . ' tabs are open');
+$chosen = $tabs[$index];}
+else {
+$hits = array();
+foreach ($tabs as $tab) {
+if (stripos($tab['url'], $match) !== false || stripos($tab['title'], $match) !== false) $hits[] = $tab;}
+if (count($hits) === 0) throw new RuntimeException('no tab url or title contains that text');
+if (count($hits) > 1) throw new RuntimeException(count($hits) . ' tabs match that text (indexes ' . implode(', ', array_map(function ($tab) {return $tab['index'];}, $hits)) . '); choose by index');
+$chosen = $hits[0];}
+if ($chosen['ws'] === '') throw new RuntimeException('tab ' . $chosen['index'] . ' cannot be controlled (another DevTools client holds it)');
+if ($chosen['ws'] !== $this->ws_url) {
+$saved = array($this->client, $this->ws_url, $this->frame_dx, $this->frame_dy, $this->frame_stack);
+try {$this->switch_page($chosen['ws']);}
+catch (Exception $e) {
+list($this->client, $this->ws_url, $this->frame_dx, $this->frame_dy, $this->frame_stack) = $saved;
+throw new RuntimeException('tab ' . $chosen['index'] . ' could not be attached (it may have closed): ' . $e->getMessage());}}
+else {try {$this->command('Page.bringToFront', new stdClass());} catch (Exception $e) {}}
+foreach ($this->tab_list() as $tab) {if ($tab['id'] === $chosen['id']) return $tab;}
+return $chosen;}
+
+function print_pdf($path, $limit) {
+$params = array('printBackground' => true, 'preferCSSPageSize' => true, 'transferMode' => 'ReturnAsStream');
+try {$result = $this->command('Page.printToPDF', $params, 90);}
+catch (RuntimeException $e) {
+if (!str_contains($e->getMessage(), 'transferMode')) throw $e;
+unset($params['transferMode']);
+$result = $this->command('Page.printToPDF', $params, 90);}
+$out = @fopen($path, 'wb');
+if ($out === false) throw new RuntimeException('cannot write ' . $path);
+$size = 0;
+try {
+if (!empty($result['stream'])) {
+$handle = (string)$result['stream'];
+try {
+do {
+$chunk = $this->command('IO.read', array('handle' => $handle, 'size' => 1048576), 60);
+$bytes = !empty($chunk['base64Encoded']) ? base64_decode(isset($chunk['data']) ? $chunk['data'] : '', true) : (isset($chunk['data']) ? $chunk['data'] : '');
+if ($bytes === false) throw new RuntimeException('Chrome sent a corrupt PDF chunk');
+$size += strlen($bytes);
+if ($size > $limit) throw new RuntimeException('the PDF is larger than the ' . $limit . ' byte limit');
+fwrite($out, $bytes);
+} while (empty($chunk['eof']));}
+finally {try {$this->command('IO.close', array('handle' => $handle));} catch (Exception $e) {}}}
+else if (!empty($result['data'])) {
+$bytes = base64_decode($result['data'], true);
+if ($bytes === false) throw new RuntimeException('Chrome sent a corrupt PDF');
+$size = strlen($bytes);
+if ($size > $limit) throw new RuntimeException('the PDF is larger than the ' . $limit . ' byte limit');
+fwrite($out, $bytes);}
+else throw new RuntimeException('Chrome returned no PDF data');}
+finally {fclose($out);}
+return $size;}
+
 private function accept_dialog() {
 $this->next_id++;
 $body = json_encode(array(
@@ -1255,11 +1337,33 @@ if ($raw === false) break;
 $raw = rtrim($raw, "\r\n");
 if (str_starts_with($raw, 'done')) break;
 try {
+if (str_starts_with($raw, 'mcp:') && $this->chrome !== null) {$this->mcp_command($raw); continue;}
 $line = $this->expand_backticks(trim($raw));
 if ($line === '' || str_starts_with($line, '//')) continue;
 $this->execute_step($line, -1);}
 catch (Exception $e) {$this->emit('ERROR - ' . $e->getMessage());}}
 $this->live = false;}
+
+function mcp_command($raw) {
+$parts = explode(' ', trim($raw));
+try {
+if ($parts[0] === 'mcp:tabs' && count($parts) === 2) {
+$tabs = array_map(function ($tab) {unset($tab['ws']); return $tab;}, $this->chrome->tab_list());
+return $this->mcp_result($parts[1], array('tabs' => $tabs));}
+if ($parts[0] === 'mcp:switch' && count($parts) === 3) {
+$want = json_decode((string)base64_decode($parts[1], true), true);
+if (!is_array($want) || (!isset($want['index']) && !isset($want['match']))) throw new RuntimeException('bad tab selection');
+$tab = $this->chrome->tab_switch(isset($want['index']) ? (int)$want['index'] : null, isset($want['match']) ? (string)$want['match'] : '');
+unset($tab['ws']);
+return $this->mcp_result($parts[2], array('tab' => $tab));}
+if ($parts[0] === 'mcp:pdf' && count($parts) === 3) {
+$this->chrome->print_pdf($parts[1], (int)$parts[2]);
+return;}
+throw new RuntimeException('malformed ' . $parts[0] . ' command');}
+catch (Exception $e) {$this->emit('ERROR - ' . $e->getMessage());}}
+
+function mcp_result($file, $payload) {
+if (file_put_contents($file, json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) === false) throw new RuntimeException('cannot save ' . $file);}
 
 function go($url, $index) {
 if (!$this->require_chrome($index)) return;

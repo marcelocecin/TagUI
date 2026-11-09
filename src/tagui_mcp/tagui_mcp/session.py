@@ -78,6 +78,7 @@ class LiveSession:
         self._stderr_thread: threading.Thread | None = None
         self._workdir: Path | None = None
         self._mode: BrowserMode | None = None
+        self._engine = "casper"
         self._id = 0
         self._running = False
         self.transcript: list[str] = []
@@ -95,6 +96,10 @@ class LiveSession:
     @property
     def mode(self) -> BrowserMode | None:
         return self._mode
+
+    @property
+    def engine(self) -> str:
+        return self._engine
 
     @property
     def workdir(self) -> Path | None:
@@ -136,6 +141,7 @@ class LiveSession:
             self._reap()
             raise TaguiFailure(f"could not start TagUI live mode: {exc}") from exc
         self._mode = mode
+        self._engine = normalize_engine(engine)
         self._running = True
 
     def stop(self) -> None:

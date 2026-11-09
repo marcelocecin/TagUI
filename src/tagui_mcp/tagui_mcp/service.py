@@ -6,7 +6,11 @@ both use TagUI's Chrome debugging port, so they are not allowed to overlap.
 
 from __future__ import annotations
 
+import base64
+import json
+import os
 import re
+import shutil
 import threading
 import time
 from collections.abc import Callable
@@ -126,6 +130,22 @@ class TaguiService:
     def browser_read(self, target: str = "page", timeout_seconds: float = 45) -> dict[str, object]:
         with self._lock:
             return self._guard(lambda: self._browser_read(target, timeout_seconds))
+
+    def browser_tabs(self, timeout_seconds: float = 20) -> dict[str, object]:
+        with self._lock:
+            return self._guard(lambda: self._browser_tabs(timeout_seconds))
+
+    def browser_switch_tab(
+        self, index: int | None = None, query: str = "", timeout_seconds: float = 20
+    ) -> dict[str, object]:
+        with self._lock:
+            return self._guard(lambda: self._browser_switch_tab(index, query, timeout_seconds))
+
+    def browser_pdf(
+        self, path: str = "", overwrite: bool = False, timeout_seconds: float = 120
+    ) -> dict[str, object]:
+        with self._lock:
+            return self._guard(lambda: self._browser_pdf(path, overwrite, timeout_seconds))
 
     def page_state(self, timeout_seconds: float = 45) -> dict[str, object]:
         with self._lock:
@@ -286,6 +306,80 @@ class TaguiService:
         if not ok:
             result["error"] = output.strip()
         return result
+
+    def _ensure_modern(self, tool: str) -> None:
+        self._ensure_running()
+        if self.session.engine != "modern":
+            raise TaguiFailure(
+                f"{tool} is not supported by the casper engine, which has no tab or print control "
+                "in live mode. Call browser_stop, then browser_start with engine=\"modern\"."
+            )
+
+    def _mcp_call(self, command: str, name: str, timeout_seconds: float) -> dict[str, object]:
+        """Run an mcp: live command; it either prints ERROR or leaves JSON in the work directory."""
+        workdir = self.session.workdir
+        if workdir is None or " " in str(workdir):
+            raise TaguiFailure("the live work directory cannot be used for this tool")
+        dest = workdir / name
+        dest.unlink(missing_ok=True)
+        output = self.session.run_step(command.replace("{out}", str(dest)), timeout=timeout_seconds, record=False)
+        if "ERROR -" in output:
+            raise TaguiFailure(output.strip())
+        try:
+            return json.loads(dest.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise TaguiFailure(f"TagUI returned no tab data ({exc})") from exc
+
+    def _browser_tabs(self, timeout_seconds: float) -> dict[str, object]:
+        self._ensure_modern("browser_tabs")
+        data = self._mcp_call("mcp:tabs {out}", "mcp_tabs.json", timeout_seconds)
+        tabs = data.get("tabs", [])
+        return {"ok": True, "count": len(tabs), "tabs": tabs}
+
+    def _browser_switch_tab(
+        self, index: int | None, query: str, timeout_seconds: float
+    ) -> dict[str, object]:
+        self._ensure_modern("browser_switch_tab")
+        if index is not None and (isinstance(index, bool) or not isinstance(index, int) or index < 0):
+            raise TaguiFailure("index must be a non-negative integer")
+        if not isinstance(query, str):
+            raise TaguiFailure("query must be a string")
+        query = query.strip()
+        if (index is None) == (query == ""):
+            raise TaguiFailure("give exactly one of index or query")
+        if len(query) > 500 or "\x00" in query:
+            raise TaguiFailure("query is too long or contains a NUL character")
+        wanted = {"index": index} if index is not None else {"match": query}
+        encoded = base64.b64encode(json.dumps(wanted).encode("utf-8")).decode("ascii")
+        data = self._mcp_call(f"mcp:switch {encoded} {{out}}", "mcp_switch.json", timeout_seconds)
+        return {"ok": True, "tab": data.get("tab")}
+
+    def _browser_pdf(self, path: str, overwrite: bool, timeout_seconds: float) -> dict[str, object]:
+        self._ensure_modern("browser_pdf")
+        target = files.output_path(files.file_roots(self.workspace), path, ".pdf", overwrite)
+        workdir = self.session.workdir
+        if workdir is None or " " in str(workdir):
+            raise TaguiFailure("the live work directory cannot be used for this tool")
+        scratch = workdir / "mcp_page.pdf"
+        scratch.unlink(missing_ok=True)
+        try:
+            output = self.session.run_step(
+                f"mcp:pdf {scratch} {files.max_file_bytes()}", timeout=timeout_seconds, record=False
+            )
+            if "ERROR -" in output:
+                raise TaguiFailure(output.strip())
+            head = scratch.read_bytes()[:5] if scratch.is_file() else b""
+            if head != b"%PDF-":
+                raise TaguiFailure("Chrome did not return a valid PDF")
+            partial = target.with_name(f".{target.name}.{os.getpid()}.part")
+            try:
+                shutil.copyfile(scratch, partial)
+                os.replace(partial, target)
+            finally:
+                partial.unlink(missing_ok=True)
+        finally:
+            scratch.unlink(missing_ok=True)
+        return {"ok": True, "path": str(target), "size": target.stat().st_size}
 
     def _page_state(self, timeout_seconds: float) -> dict[str, object]:
         self._ensure_running()
